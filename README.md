@@ -13,33 +13,39 @@ built from `docs/Product_Requirements.md`, `docs/Backend_Plan.md`, and `docs/Fro
 backend/    Express + TypeScript + Prisma (PostgreSQL) API
 frontend/   Next.js (App Router) + TypeScript + Tailwind dashboard
 docs/       Product requirements and phase-wise build plans
+scripts/    Cross-platform setup (see SETUP.md)
 ```
 
 ## Running Phase 1 locally
 
-### 1. Backend
+### 1. One-command setup
+
+Installs Node.js and PostgreSQL if missing, creates the databases, writes `.env` files, and runs
+`npm install` + the Prisma migration — see `SETUP.md` for details, platform notes, and
+troubleshooting.
 
 ```bash
-cd backend
-cp .env.example .env   # adjust DATABASE_URL if your Postgres isn't on localhost:5432
-npm install
-npx prisma migrate dev
-npm run dev             # http://localhost:4000
+./scripts/setup.sh        # macOS / Linux
+.\scripts\setup.ps1       # Windows (run PowerShell as Administrator)
 ```
 
-Run the test suite (needs a second Postgres database, e.g. `ai_memory_test`):
+Already have Node + Postgres running? Skip straight to the app-only setup:
 
 ```bash
-npm test
+node scripts/setup.mjs
 ```
 
-### 2. Frontend
+### 2. Run it
 
 ```bash
-cd frontend
-cp .env.example .env.local
-npm install
-npm run dev              # http://localhost:3000
+cd backend && npm run dev     # http://localhost:4000
+cd frontend && npm run dev    # http://localhost:3000 (second terminal)
+```
+
+Run the backend test suite (uses the `ai_memory_test` database `scripts/setup.mjs` already created):
+
+```bash
+cd backend && npm test
 ```
 
 ### 3. Try it
