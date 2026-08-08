@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, memoryImageSrc, type Memory } from "@/lib/api";
@@ -37,8 +38,13 @@ export function MemoryRow({ memory }: { memory: Memory }) {
       style={{ contentVisibility: "auto", containIntrinsicSize: "0 88px" }}
     >
       {imageSrc && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={imageSrc} alt={memory.content} className="h-14 w-14 shrink-0 rounded-lg object-cover" />
+        <Image
+          src={imageSrc}
+          alt={memory.content}
+          width={56}
+          height={56}
+          className="h-14 w-14 shrink-0 rounded-lg object-cover"
+        />
       )}
       <Link href={`/dashboard/memories/${memory.id}`} className="min-w-0 flex-1">
         <p className="line-clamp-2 text-sm text-foreground">{memory.content}</p>

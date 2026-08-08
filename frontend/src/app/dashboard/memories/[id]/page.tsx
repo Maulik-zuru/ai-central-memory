@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Trash2 } from "lucide-react";
@@ -89,8 +90,13 @@ export default function MemoryDetailPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {imageSrc && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={imageSrc} alt={memory.content} className="max-h-80 w-full rounded-lg object-cover" />
+            <Image
+              src={imageSrc}
+              alt={memory.content}
+              width={800}
+              height={320}
+              className="max-h-80 w-full rounded-lg object-cover"
+            />
           )}
 
           {isEditing ? (

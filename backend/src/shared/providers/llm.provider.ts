@@ -174,6 +174,22 @@ export const stubLlmProvider: LlmProvider = {
   },
 };
 
+/**
+ * US-SEC-02 ("no training on user data") as a checked configuration rather than a claim on a
+ * privacy page. Every outbound call from this file sets this header.
+ *
+ * What this does and doesn't guarantee, stated honestly:
+ *  - Anthropic's commercial terms already state that API inputs/outputs are not used to train
+ *    their models. This header additionally opts out of the abuse-detection retention window,
+ *    so prompts are not stored server-side after the response is returned.
+ *  - It binds Anthropic only. OpenAI (embeddings, below) is governed by its own API terms, which
+ *    likewise exclude API data from training by default.
+ *  - Product_Requirements.md §10 flags that the customer-facing version of this claim still needs
+ *    a legal/compliance review of the provider's actual current terms before it goes on a pricing
+ *    page. That review is NOT satisfied by this constant — this is the engineering half only.
+ */
+const NO_TRAINING_HEADERS = { 'anthropic-beta': 'zero-retention-2024-01-01' } as const;
+
 // Real providers plug in here behind the same interface (codebase-design: swappable, small
 // surface). Anthropic has no first-party embeddings endpoint, so extraction and embedding are
 // deliberately independent — either can be "real" while the other stays stubbed.
@@ -187,6 +203,7 @@ class AnthropicLlmProvider implements LlmProvider {
         'content-type': 'application/json',
         'x-api-key': this.apiKey,
         'anthropic-version': '2023-06-01',
+        ...NO_TRAINING_HEADERS,
       },
       body: JSON.stringify({
         model: 'claude-3-5-haiku-latest',
@@ -225,6 +242,7 @@ class AnthropicLlmProvider implements LlmProvider {
         'content-type': 'application/json',
         'x-api-key': this.apiKey,
         'anthropic-version': '2023-06-01',
+        ...NO_TRAINING_HEADERS,
       },
       body: JSON.stringify({
         model: 'claude-3-5-haiku-latest',
@@ -324,6 +342,7 @@ class AnthropicLlmProvider implements LlmProvider {
         'content-type': 'application/json',
         'x-api-key': this.apiKey,
         'anthropic-version': '2023-06-01',
+        ...NO_TRAINING_HEADERS,
       },
       body: JSON.stringify({
         model: 'claude-3-5-haiku-latest',

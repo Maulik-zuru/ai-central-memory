@@ -41,8 +41,18 @@ export const localDiskStorageProvider: StorageProvider = {
   },
 };
 
+let cached: StorageProvider | null = null;
+
 export function getStorageProvider(): StorageProvider {
-  return localDiskStorageProvider;
+  return cached ?? localDiskStorageProvider;
+}
+
+/** Test-only escape hatch so suites can inject a failing/fake provider, matching the shape
+ * llm.provider.ts and payment.provider.ts already expose. Phase 11 needs it to prove an export
+ * that fails mid-write lands in "failed" rather than hanging in "running" — a path that cannot be
+ * exercised against a real disk that always succeeds. */
+export function __setStorageProviderForTests(provider: StorageProvider | null) {
+  cached = provider;
 }
 
 export { UPLOAD_DIR };

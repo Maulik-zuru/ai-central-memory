@@ -27,6 +27,23 @@ export const sessionService = {
     return sessions.map(toPublicSession);
   },
 
+  /** US-ACC-08's "I think my account is compromised" action: everything except the device asking.
+   * One updateMany rather than a read-then-loop, so there is no window in which a session created
+   * mid-operation survives the sweep. Callers authenticated by API key have no session of their
+   * own to preserve, so `exceptSessionId` is optional and every session is revoked in that case. */
+  async revokeAllOthers(userId: string, exceptSessionId?: string) {
+    const { count } = await prisma.session.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        ...(exceptSessionId ? { id: { not: exceptSessionId } } : {}),
+      },
+      data: { revokedAt: new Date() },
+    });
+    if (count > 0) await auditService.record(userId, 'session.revokeAll', { type: 'User', id: userId });
+    return count;
+  },
+
   async revoke(userId: string, sessionId: string) {
     const session = await prisma.session.findUnique({ where: { id: sessionId } });
     if (!session || session.userId !== userId) {

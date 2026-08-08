@@ -15,7 +15,9 @@ export function DialogContent({ className, children, ...props }: React.Component
       <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-foreground/30 backdrop-blur-[2px] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
       <DialogPrimitive.Content
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border/60 bg-card p-6 shadow-[var(--shadow-raised)]",
+          // max-w-[calc(100vw-2rem)] so the panel never exceeds a phone viewport — max-w-md alone
+          // (448px) overflowed a 390px screen and clipped the action buttons (Phase 12 mobile pass).
+          "fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-border/60 bg-card p-6 shadow-[var(--shadow-raised)] sm:max-w-md",
           className,
         )}
         {...props}

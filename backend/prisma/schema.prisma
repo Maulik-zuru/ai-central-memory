@@ -21,6 +21,7 @@ model User {
   planId             String   @default("core")
   autoCapture        Json     @default("{}") // per-platform auto-capture consent toggles (US-ACC-07)
   smartMemoryEnabled Boolean  @default(true) // Phase 4: US-ADV-01 Smart Mode toggle
+  hasSeenTour        Boolean  @default(false) // Phase 12: first-run guided tour, shown once
   createdAt          DateTime @default(now())
 
   apiKeys       ApiKey[]
@@ -42,6 +43,7 @@ model User {
   usageAnalyticsEvents UsageAnalyticsEvent[]
   usageAnalyticsSummaries UsageAnalyticsSummary[]
   payments Payment[]
+  dataExportRequests DataExportRequest[]
 }
 
 model Session {
@@ -468,4 +470,37 @@ model ProcessedWebhookEvent {
   id            String   @id @default(cuid())
   stripeEventId String   @unique
   processedAt   DateTime @default(now())
+}
+
+// --- Phase 11: Security, Privacy & Compliance ------------------------------------------------
+// See docs/Phase11_Implementation_Plan.md §5.1.
+model DataExportRequest {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status      String    @default("queued") // "queued" | "running" | "complete" | "failed"
+  downloadKey String? // StorageProvider key for the generated archive
+  errorReason String?
+  requestedAt DateTime  @default(now())
+  completedAt DateTime?
+  expiresAt   DateTime? // set on completion: completedAt + EXPORT_TTL
+
+  @@index([userId])
+}
+
+// Deliberately NOT a relation to User. AuditLog cascades from User (see its onDelete above), so
+// it structurally cannot hold evidence that an account was deleted — the row would vanish with
+// the account it documents. This is the one table in the schema allowed to reference a user who
+// no longer exists, because that is exactly the case it exists to cover (US-SEC-05).
+// userEmailSnapshot is denormalized for the same reason: there is no User row left to join to.
+model ComplianceLog {
+  id                String    @id @default(cuid())
+  userId            String
+  userEmailSnapshot String
+  action            String // "data.export" | "account.delete"
+  requestedAt       DateTime
+  completedAt       DateTime?
+  outcome           String // "completed" | "failed"
+
+  @@index([userId])
 }

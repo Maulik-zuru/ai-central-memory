@@ -13,7 +13,9 @@ export type ExtensionMessage =
   | { type: "UPDATE_SMART_MEMORY"; enabled: boolean }
   | { type: "GET_BUCKETS" }
   | { type: "ONE_CLICK_SAVE"; content: string; bucketId?: string }
-  | { type: "CAPTURE"; snippet: string }
+  // `platform` is the active SiteAdapter's name — the same key account.autoCapture is keyed by,
+  // so the server can enforce the per-platform consent toggle (US-ACC-07).
+  | { type: "CAPTURE"; snippet: string; platform: string }
   | { type: "GET_PENDING_SUGGESTIONS" }
   | { type: "APPROVE_SUGGESTION"; id: string }
   | { type: "DISMISS_SUGGESTION"; id: string }

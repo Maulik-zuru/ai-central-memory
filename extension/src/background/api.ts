@@ -54,7 +54,11 @@ export const backgroundApi = {
   oneClickSave: (content: string, bucketId?: string) =>
     apiFetch<{ memory: Memory }>("/api/memories/one-click", { method: "POST", body: JSON.stringify({ content, bucketId }) }),
 
-  capture: (snippet: string) => apiFetch<{ suggestions: Suggestion[] }>("/api/capture", { method: "POST", body: JSON.stringify({ snippet }) }),
+  capture: (snippet: string, platform: string) =>
+    apiFetch<{ suggestions: Suggestion[] }>("/api/capture", {
+      method: "POST",
+      body: JSON.stringify({ snippet, platform }),
+    }),
 
   getPendingSuggestions: () => apiFetch<{ suggestions: Suggestion[] }>("/api/suggestions"),
 

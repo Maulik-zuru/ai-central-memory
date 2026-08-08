@@ -46,7 +46,7 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
       return backgroundApi.oneClickSave(message.content, message.bucketId);
 
     case "CAPTURE":
-      return backgroundApi.capture(message.snippet);
+      return backgroundApi.capture(message.snippet, message.platform);
 
     case "GET_PENDING_SUGGESTIONS":
       return backgroundApi.getPendingSuggestions();

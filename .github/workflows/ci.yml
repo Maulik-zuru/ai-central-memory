@@ -1,0 +1,186 @@
+name: CI
+
+# The first automated gate this repository has had (docs/Phase12_Implementation_Plan.md §4).
+# Until Phase 12, every test run was a human remembering to type `npm test`.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  # A new push to the same branch supersedes an in-flight run rather than queueing behind it.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (typecheck + tests)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # pgvector is not optional here: the schema declares `extensions = [vector]` and several
+        # tests exercise real `<=>` similarity queries, so the stock postgres image will not do.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ai_memory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ai_memory_test?schema=public
+      JWT_ACCESS_SECRET: ci-access-secret
+      JWT_REFRESH_SECRET: ci-refresh-secret
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Apply migrations
+        working-directory: backend
+        # deploy, not dev: CI applies the committed migration history exactly as production would,
+        # and fails on drift rather than silently generating a new migration to paper over it.
+        run: npx prisma migrate deploy
+
+      - name: Typecheck
+        working-directory: backend
+        run: npx tsc --noEmit
+
+      - name: Test
+        working-directory: backend
+        run: npm test
+
+  frontend:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Build
+        working-directory: frontend
+        # `next build` runs its own typecheck too, but the explicit step above fails faster and
+        # with a clearer signal when the break is purely a type error.
+        run: npm run build
+
+  accessibility:
+    name: Accessibility (WCAG 2.1 AA sweep)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ai_memory_a11y
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ai_memory_a11y?schema=public
+      JWT_ACCESS_SECRET: ci-access-secret
+      JWT_REFRESH_SECRET: ci-refresh-secret
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+      CORS_ORIGIN: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Start backend
+        working-directory: backend
+        run: |
+          npm ci
+          npx prisma migrate deploy
+          npm run build
+          node dist/index.js &
+          npx wait-on http://localhost:4000/api/account/me --timeout 60000 --httpTimeout 60000 || true
+
+      - name: Build and start frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build
+          npm run start &
+          npx wait-on http://localhost:3000/login --timeout 60000
+
+      - name: Seed an account for the authenticated routes
+        run: |
+          curl -sf -X POST http://localhost:4000/api/auth/register \
+            -H 'content-type: application/json' \
+            -d '{"email":"a11y-ci@example.com","password":"Str0ngPassw0rd"}' > /dev/null
+
+      - name: Run WCAG 2.1 AA sweep
+        working-directory: frontend
+        env:
+          A11Y_EMAIL: a11y-ci@example.com
+          CHROMIUM_PATH: ''
+        # The sweep exits non-zero on any violation, so this step is the gate.
+        run: npm run a11y
+
+  extension:
+    name: Extension (typecheck + build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Install dependencies
+        working-directory: extension
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: extension
+        run: npx tsc --noEmit
+
+      - name: Build
+        working-directory: extension
+        run: npm run build

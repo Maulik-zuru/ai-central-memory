@@ -92,7 +92,7 @@ function LoginForm() {
 
         <p className="mt-6 text-center text-sm text-muted-foreground">
           New here?{" "}
-          <Link href="/register" className="text-primary underline-offset-4 hover:underline">
+          <Link href="/register" className="text-primary underline underline-offset-4">
             Create an account
           </Link>
         </p>

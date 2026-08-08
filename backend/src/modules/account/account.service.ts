@@ -18,6 +18,7 @@ export const accountService = {
       createdAt: user.createdAt,
       autoCapture: user.autoCapture as Record<string, boolean>,
       smartMemoryEnabled: user.smartMemoryEnabled,
+      hasSeenTour: user.hasSeenTour,
       subscription: user.subscription
         ? {
             plan: user.subscription.plan,
@@ -35,6 +36,12 @@ export const accountService = {
     });
     await auditService.record(userId, 'account.autoCapture.update', { type: 'User', id: userId });
     return user.autoCapture as Record<string, boolean>;
+  },
+
+  /** Phase 12: one-way flag — the first-run tour is dismissed once and never re-shown. */
+  async markTourSeen(userId: string) {
+    const user = await prisma.user.update({ where: { id: userId }, data: { hasSeenTour: true } });
+    return user.hasSeenTour;
   },
 
   async updateSmartMemory(userId: string, enabled: boolean) {

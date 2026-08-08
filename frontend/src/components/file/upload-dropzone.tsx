@@ -52,7 +52,8 @@ export function UploadDropzone({ bucketId }: { bucketId: string }) {
       >
         <UploadCloud className="h-5 w-5" />
         {upload.isPending ? "Uploading…" : "Drag a file here, or click to choose one"}
-        <span className="text-xs text-muted-foreground/70">PDF, Word, Markdown, or plain text</span>
+        {/* No opacity modifier: /70 dropped this below the AA contrast floor (Phase 12 a11y pass). */}
+        <span className="text-xs text-muted-foreground">PDF, Word, Markdown, or plain text</span>
       </button>
       <input
         ref={inputRef}

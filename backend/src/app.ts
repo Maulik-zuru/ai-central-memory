@@ -25,6 +25,7 @@ import { askRouter } from './modules/ask/ask.routes';
 import { extensionRouter } from './modules/extension/extension.routes';
 import { intelligenceRouter } from './modules/intelligence/intelligence.routes';
 import { billingRouter } from './modules/billing/billing.routes';
+import { opsRouter } from './modules/ops/ops.routes';
 
 export function createApp() {
   const app = express();
@@ -82,6 +83,7 @@ export function createApp() {
   app.use('/api/extension', extensionRouter);
   app.use('/api/intelligence', intelligenceRouter);
   app.use('/api/billing', billingRouter);
+  app.use('/api/ops', opsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

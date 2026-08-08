@@ -44,12 +44,18 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
   useEffect(() => {
     const unobserve = adapter.observeNewTurns(async (text) => {
       try {
-        const { suggestions } = await sendToBackground<{ suggestions: Suggestion[] }>({ type: "CAPTURE", snippet: text });
+        const { suggestions } = await sendToBackground<{ suggestions: Suggestion[] }>({
+          type: "CAPTURE",
+          snippet: text,
+          platform: adapter.name,
+        });
+        // An empty array means auto-capture is switched off for this platform (US-ACC-07, enforced
+        // server-side since Phase 11) — nothing to surface, which is the whole point of the toggle.
         const pending = suggestions.find((s) => s.status === "pending");
         if (pending) setPendingSuggestion(pending);
       } catch {
-        // Auto-capture may be disabled for this platform, or the call failed — silently skip;
-        // this is a background convenience, not a user-initiated action needing an error surface.
+        // The call failed — silently skip; this is a background convenience, not a user-initiated
+        // action needing an error surface.
       }
     });
     return unobserve;

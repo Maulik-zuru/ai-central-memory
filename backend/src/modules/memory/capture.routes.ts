@@ -9,8 +9,8 @@ import { captureService } from './capture.service';
 
 async function submit(req: Request, res: Response) {
   if (!req.auth) throw AppError.unauthorized();
-  const { snippet } = captureSchema.parse(req.body);
-  const suggestions = await captureService.submit(req.auth.userId, snippet);
+  const { snippet, platform } = captureSchema.parse(req.body);
+  const suggestions = await captureService.submit(req.auth.userId, snippet, platform);
   res.status(201).json({ suggestions });
 }
 

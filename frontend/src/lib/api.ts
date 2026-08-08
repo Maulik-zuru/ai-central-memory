@@ -1,4 +1,4 @@
-import { apiRequest } from "./api-client";
+import { apiRequest, apiRequestBlob } from "./api-client";
 
 export interface Account {
   id: string;
@@ -8,6 +8,7 @@ export interface Account {
   createdAt: string;
   autoCapture: Record<string, boolean>;
   smartMemoryEnabled: boolean;
+  hasSeenTour: boolean;
   subscription: { plan: string; status: string; trialEndsAt: string | null } | null;
 }
 
@@ -246,6 +247,24 @@ export interface KnowledgeGraph {
   edges: GraphEdge[];
 }
 
+export interface DataExportRequest {
+  id: string;
+  status: "queued" | "running" | "complete" | "failed";
+  errorReason: string | null;
+  requestedAt: string;
+  completedAt: string | null;
+  expiresAt: string | null;
+}
+
+export interface DeletionPreview {
+  memories: number;
+  buckets: number;
+  conversations: number;
+  files: number;
+  apiKeys: number;
+  askThreads: number;
+}
+
 export interface BillingSummary {
   plan: "core" | "pro";
   status: string;
@@ -467,7 +486,47 @@ export const api = {
 
   createBillingPortalSession: (): Promise<{ url: string }> =>
     apiRequest("/api/billing/portal", { method: "POST" }),
+
+  markTourSeen: (): Promise<{ hasSeenTour: boolean }> =>
+    apiRequest("/api/account/tour-seen", { method: "POST" }),
+
+  revokeOtherSessions: (): Promise<{ revokedCount: number }> =>
+    apiRequest("/api/account/sessions/revoke-others", { method: "POST" }),
+
+  requestExport: (): Promise<{ export: DataExportRequest }> =>
+    apiRequest("/api/account/export", { method: "POST" }),
+
+  exports: (): Promise<{ exports: DataExportRequest[] }> => apiRequest("/api/account/export"),
+
+  deletionPreview: (): Promise<{ preview: DeletionPreview }> => apiRequest("/api/account/deletion-preview"),
+
+  deleteAccount: (confirmation: string) =>
+    apiRequest("/api/account", { method: "DELETE", body: JSON.stringify({ confirmation }) }),
 };
+
+/**
+ * The export archive is a file download rather than a JSON payload. It's fetched with the normal
+ * Authorization header and turned into a blob URL client-side, deliberately *not* linked to
+ * directly with a token in the query string — a URL-borne credential ends up in server access
+ * logs, browser history, and referrer headers, which is precisely the wrong place for a key that
+ * unlocks a complete copy of someone's data.
+ */
+export async function downloadExportArchive(id: string): Promise<void> {
+  const blob = await apiRequestBlob(`/api/account/export/${id}/download`);
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `memoryos-export-${id}.json`;
+  // Appended to the document because a detached anchor is ignored by some browsers.
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  // Revoked on a later tick, not synchronously after click(): the browser starts fetching the
+  // blob asynchronously, and revoking it in the same tick cancels the download before it begins.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
 
 export function memoryImageSrc(memory: Memory): string | null {
   if (!memory.imageUrl) return null;

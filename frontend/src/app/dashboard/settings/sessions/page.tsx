@@ -15,6 +15,11 @@ export default function SessionsPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sessions"] }),
   });
 
+  const revokeOthers = useMutation({
+    mutationFn: api.revokeOtherSessions,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+  });
+
   const sessions = data?.sessions ?? [];
 
   return (
@@ -47,6 +52,24 @@ export default function SessionsPage() {
             </div>
           ))}
         </div>
+
+        {sessions.length > 1 && (
+          <div className="mt-4 flex items-center justify-between gap-4 border-t border-border pt-4">
+            <p className="text-sm text-muted-foreground">
+              Signed in somewhere you don&apos;t recognise? Sign out everywhere except this device.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="shrink-0 gap-2"
+              disabled={revokeOthers.isPending}
+              onClick={() => revokeOthers.mutate()}
+            >
+              <LogOut className="h-4 w-4" />
+              {revokeOthers.isPending ? "Signing out…" : "Sign out other devices"}
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

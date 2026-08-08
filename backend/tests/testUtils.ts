@@ -15,6 +15,9 @@ export async function resetDb() {
   // cascades from a user delete below — cleared explicitly, the same reason it's here and not in
   // the per-model deletes further down.
   await prisma.processedWebhookEvent.deleteMany();
+  // ComplianceLog deliberately has no User relation (see schema.prisma) — surviving a user delete
+  // is the point of it, which also means it survives resetDb's user delete and must be cleared here.
+  await prisma.complianceLog.deleteMany();
   await prisma.memorySuggestion.deleteMany();
   await prisma.memoryVersion.deleteMany();
   await prisma.memory.deleteMany();

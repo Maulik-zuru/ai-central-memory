@@ -57,6 +57,23 @@ export async function apiRequest(path: string, options: RequestOptions = {}) {
   return parseOrThrow(res);
 }
 
+/** Same auth-and-retry path as apiRequest, but returns the raw body — for file downloads (the
+ * Phase 11 data-export archive) where the response is bytes, not a JSON envelope. */
+export async function apiRequestBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
+  let res = await rawRequest(path, options);
+
+  if (res.status === 401 && !options.skipAuthRetry) {
+    const refreshed = await refreshSession();
+    if (refreshed) res = await rawRequest(path, options);
+  }
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(res.status, body?.error?.message ?? "Download failed", body?.error?.code);
+  }
+  return res.blob();
+}
+
 export async function refreshSession(): Promise<boolean> {
   try {
     const res = await fetch(`${API_URL}/api/auth/refresh`, {

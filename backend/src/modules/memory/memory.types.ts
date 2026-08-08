@@ -23,4 +23,9 @@ export const mergeMemoriesSchema = z.object({
 
 export const captureSchema = z.object({
   snippet: z.string().trim().min(1).max(8000),
+  // Phase 11 (US-ACC-07): which platform the snippet came from, so the per-platform auto-capture
+  // consent toggle can actually be enforced. Optional because a caller that omits it (a direct
+  // API-key integration, not one of the extension's known site adapters) has no toggle to check
+  // against — the extension always sends its SiteAdapter.name here.
+  platform: z.string().trim().min(1).max(50).optional(),
 });

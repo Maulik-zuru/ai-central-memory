@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { DataExportCard } from "@/components/settings/data-export-card";
+import { DeleteAccountCard } from "@/components/settings/delete-account-card";
 
 const PLATFORMS = [
   { key: "chatgpt", label: "ChatGPT" },
@@ -71,13 +73,36 @@ export default function PrivacyPage() {
       <Card>
         <CardHeader>
           <CardTitle>Data handling</CardTitle>
+          <CardDescription>How your content is stored and what it is never used for.</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-2 text-sm text-muted-foreground">
-          <p>Encrypted in transit and at rest.</p>
-          <p>Never used to train any model, never sold to a third party.</p>
-          <p>Full technical verification of these guarantees lands with the Security &amp; Compliance phase.</p>
+        <CardContent className="flex flex-col gap-3 text-sm">
+          <div>
+            <p className="font-medium">Encrypted in transit and at rest</p>
+            <p className="text-muted-foreground">
+              All API traffic runs over TLS, and database connections require SSL outside local
+              development. Uploaded files and database storage are encrypted at the infrastructure
+              layer.
+            </p>
+          </div>
+          <div>
+            <p className="font-medium">Never used to train a model</p>
+            <p className="text-muted-foreground">
+              Content sent to our language-model provider runs under a zero-retention, no-training
+              configuration. We do not fine-tune on your data on any plan.
+            </p>
+          </div>
+          <div>
+            <p className="font-medium">Never sold, and never in analytics</p>
+            <p className="text-muted-foreground">
+              Usage analytics record counts and timings only — never the text of a memory,
+              conversation, or file. Nothing is sold or shared with advertisers.
+            </p>
+          </div>
         </CardContent>
       </Card>
+
+      <DataExportCard />
+      <DeleteAccountCard />
     </div>
   );
 }
