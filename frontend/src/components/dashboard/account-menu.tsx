@@ -34,7 +34,7 @@ export function AccountMenu({ account }: { account: Account }) {
         {initial}
       </button>
       {open && (
-        <div className="absolute right-0 z-10 mt-2 w-56 rounded-md border border-border bg-card p-1 shadow-md">
+        <div className="absolute right-0 z-10 mt-2 w-56 rounded-xl border border-border/60 bg-card p-1 shadow-[var(--shadow-raised)]">
           <div className="px-3 py-2 text-sm">
             <p className="truncate font-medium">{account.email}</p>
             <p className="text-xs uppercase tracking-wide text-muted-foreground">{account.subscription?.plan ?? "core"} plan</p>

@@ -34,15 +34,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="flex w-60 flex-col border-r border-border bg-card px-3 py-4">
-        <div className="mb-6 flex items-center gap-2 px-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground">
+    <div className="flex min-h-screen bg-background">
+      <aside className="flex w-64 flex-col border-r border-border bg-card px-3 py-5">
+        <div className="mb-8 flex items-center gap-2.5 px-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground font-display text-base text-background">
             M
           </div>
-          <span className="font-semibold tracking-tight">MemoryOS</span>
+          <span className="font-display text-lg tracking-tight">MemoryOS</span>
         </div>
-        <nav className="flex flex-1 flex-col gap-1">
+        <nav className="flex flex-1 flex-col gap-0.5">
           {NAV_ITEMS.map((item) => (
             <NavItem key={item.href} {...item} />
           ))}
@@ -51,13 +51,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       <div className="flex flex-1 flex-col">
         <TrialBanner account={account} />
-        <header className="flex h-14 items-center justify-between border-b border-border px-6">
+        <header className="flex h-16 items-center justify-between border-b border-border px-8">
           <span className="text-sm text-muted-foreground">
             {account.subscription?.plan === "pro" ? "Pro" : "Core"} workspace
           </span>
           <AccountMenu account={account} />
         </header>
-        <main className="flex flex-1 flex-col p-6">{children}</main>
+        <main className="flex flex-1 flex-col p-8">{children}</main>
       </div>
     </div>
   );

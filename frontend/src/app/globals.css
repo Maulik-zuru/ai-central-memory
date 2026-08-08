@@ -1,70 +1,56 @@
 @import "tailwindcss";
 
+/*
+  Light-only "notebook" identity — no dark mode by design.
+  Palette: paper (bg) / ink (text) / cobalt (the one accent, ink-pen blue) / moss (success) /
+  rust (destructive) / amber-tape (trial banner only). See docs/Phase1_Implementation_Plan.md
+  for the rest of the design rationale.
+*/
 :root {
-  --radius: 0.625rem;
+  --radius: 0.75rem;
 
   --background: #faf9f5;
-  --foreground: #1c1b19;
+  --foreground: #191b22;
 
   --card: #ffffff;
-  --card-foreground: #1c1b19;
+  --card-foreground: #191b22;
 
-  --primary: #d9480f;
-  --primary-foreground: #fff8f2;
+  --primary: #2c4be0;
+  --primary-foreground: #f7f8ff;
 
-  --secondary: #f0eee7;
-  --secondary-foreground: #1c1b19;
+  --secondary: #f1efe7;
+  --secondary-foreground: #191b22;
 
-  --muted: #f0eee7;
-  --muted-foreground: #6b6960;
+  --muted: #f1efe7;
+  --muted-foreground: #6b6f7a;
 
-  --accent: #f0eee7;
-  --accent-foreground: #1c1b19;
+  --accent: #eef0fb;
+  --accent-foreground: #22317a;
 
-  --destructive: #c1291b;
-  --destructive-foreground: #fff8f2;
+  --destructive: #b23b2e;
+  --destructive-foreground: #fef6f4;
 
-  --success: #2f6d3c;
-  --border: #e4e1d8;
-  --input: #e4e1d8;
-  --ring: #d9480f;
-}
+  --success: #3c7a5e;
+  --success-foreground: #f5faf7;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #121110;
-    --foreground: #f5f3ee;
+  --tape: #f0b429;
+  --tape-foreground: #4a3300;
 
-    --card: #181715;
-    --card-foreground: #f5f3ee;
+  --border: #e9e7de;
+  --input: #e9e7de;
+  --ring: #2c4be0;
 
-    --primary: #ff8a3d;
-    --primary-foreground: #1c1000;
-
-    --secondary: #201f1c;
-    --secondary-foreground: #f5f3ee;
-
-    --muted: #201f1c;
-    --muted-foreground: #a29e93;
-
-    --accent: #201f1c;
-    --accent-foreground: #f5f3ee;
-
-    --destructive: #ff6b57;
-    --destructive-foreground: #2a0900;
-
-    --success: #6cbf7c;
-    --border: #34322d;
-    --input: #34322d;
-    --ring: #ff8a3d;
-  }
+  /* Soft, diffused elevation instead of a flat 1px border doing all the work — ambient shadows
+     read as "considered" rather than "default browser card". */
+  --shadow-card: 0 1px 2px rgba(25, 27, 34, 0.04), 0 8px 24px -12px rgba(25, 27, 34, 0.10);
+  --shadow-raised: 0 2px 4px rgba(25, 27, 34, 0.05), 0 16px 40px -16px rgba(25, 27, 34, 0.18);
 }
 
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 6px);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -81,10 +67,14 @@
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-tape: var(--tape);
+  --color-tape-foreground: var(--tape-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
 
+  --font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
 }
@@ -93,9 +83,21 @@ body {
   font-feature-settings: "cv11", "ss01";
 }
 
-/* Memory-style accent used for timestamps, ids, api keys — the one deliberately technical
+h1, h2, h3, .font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+/* Utility accent used for timestamps, ids, api keys — the one deliberately technical
    typographic choice that keeps the "notebook" feel distinct from a generic SaaS dashboard. */
 .mono-tag {
   font-family: var(--font-mono);
   letter-spacing: -0.01em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
