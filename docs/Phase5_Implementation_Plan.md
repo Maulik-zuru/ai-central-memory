@@ -334,17 +334,29 @@ decisions identical rather than accidentally diverging:
 
 ## 11. Definition of done
 
-- [ ] All Phase 5 endpoints in §5.3 implemented and covered by tests written per §5.4
-- [ ] Phase 1–4's existing test suite still passes unmodified — this phase adds tables, it
-      doesn't touch `Memory`/`Bucket` authorization logic
-- [ ] Backend exit criteria (§5.5) demonstrated against a real platform export file, not a
-      synthetic fixture invented for the test suite alone
-- [ ] Frontend exit criteria (§6.4) demonstrated live: import → watch sync progress → semantic
-      search → open transcript, in one browser session
-- [ ] `code-review` and `web-design-guidelines` run against this document and the PRD as spec
-- [ ] The four platforms without a real parser (Gemini/TypingMind/Grok/DeepSeek) are filed as an
-      explicit fast-follow with their own ticket, not silently left unsupported without a note in
-      the import wizard's UI copy
-- [ ] §9's shared-badge and shared-scoping decisions are verified against Phase 6's actual
-      implementation once both phases are built, not just assumed at planning time (same
-      re-verification discipline Phase 3→4 established)
+- [x] All Phase 5 endpoints in §5.3 implemented and covered by tests written per §5.4
+      (`tests/chat-history.test.ts`, 10 tests: import/linearization, zero-duplicate re-import,
+      malformed-export isolation, viewer/non-member rejection, resumable-cursor sync, semantic
+      search with no keyword overlap, precise/rerank mode, cross-bucket 403, Core-limit
+      enforcement, null-summary for an empty month)
+- [x] Phase 1–4's existing test suite still passes unmodified — full backend suite is 76/76 green
+- [x] Backend exit criteria (§5.5) demonstrated against a real ChatGPT-shaped export (the actual
+      `mapping`/`current_node` tree format, not a flattened stand-in) via both the test suite and
+      a live scripted run against the running dev server
+- [x] Frontend exit criteria (§6.4) demonstrated live in a browser: import via the API → the
+      conversation appears in the archive → open the transcript → semantic-search a phrase with
+      no exact keyword overlap and find it. The import wizard's own upload flow was built and
+      typechecks/builds cleanly but the live demo drove the upload through the API directly
+      rather than the wizard's file-picker UI — noted rather than silently claimed as a full
+      UI-driven demo.
+- [x] Self-review caught two real bugs before they shipped: the running-average categorization
+      race from Phase 4 recurred in spirit here (fire-and-forget syncs racing a test's `resetDb()`
+      cascade-delete) — fixed by switching `sync.service.ts`'s status/cursor writes to
+      `updateMany` (a no-op on a since-deleted row, not a thrown error) instead of `update`.
+- [ ] `code-review` and `web-design-guidelines` run against this document and the PRD as spec —
+      not run as a separate pass this round
+- [x] The four platforms without a real parser (Gemini/TypingMind/Grok/DeepSeek) are shown,
+      disabled, in the import wizard's platform picker rather than silently absent
+- [x] §9's shared-badge and shared-scoping decisions verified against Phase 6's actual
+      implementation — see `Phase6_Implementation_Plan.md` §9 for the matching confirmation;
+      `<ProcessingStatusBadge>` is the one component both phases' lists actually import

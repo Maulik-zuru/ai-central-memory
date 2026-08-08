@@ -19,6 +19,8 @@ import { bucketRouter } from './modules/bucket/bucket.routes';
 import { inviteRouter } from './modules/membership/invite.routes';
 import { contextRouter } from './modules/context/context.routes';
 import { categoryRouter } from './modules/category/category.routes';
+import { chatHistoryRouter } from './modules/chat-history/chat-history.routes';
+import { fileRouter } from './modules/file/file.routes';
 
 export function createApp() {
   const app = express();
@@ -70,6 +72,8 @@ export function createApp() {
   app.use('/api/invites', inviteRouter);
   app.use('/api/context', contextRouter);
   app.use('/api/categories', categoryRouter);
+  app.use('/api/chat-history', chatHistoryRouter);
+  app.use('/api/files', fileRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

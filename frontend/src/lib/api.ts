@@ -108,6 +108,87 @@ export interface ContextPreview {
   tokenBudget: number;
 }
 
+export type ProcessingStatus = "processing" | "importing" | "ready" | "error";
+
+export interface Conversation {
+  id: string;
+  bucketId: string;
+  platform: string;
+  title: string;
+  summary: string | null;
+  messageCount: number;
+  status: ProcessingStatus;
+  errorReason: string | null;
+  importedAt: string;
+  lastSyncedAt: string;
+}
+
+export interface ConversationPage {
+  items: Conversation[];
+  nextCursor: string | null;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  position: number;
+  createdAt: string;
+}
+
+export interface ChatSearchResult {
+  conversationId: string;
+  title: string;
+  platform: string;
+  preview: string;
+  score: number;
+}
+
+export interface HistoryUsage {
+  count: number;
+  limit: number | null;
+}
+
+export interface MonthlyInsight {
+  month: string;
+  summary: string | null;
+}
+
+export interface FileRecord {
+  id: string;
+  bucketId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  status: ProcessingStatus;
+  errorReason: string | null;
+  pageCount: number | null;
+  createdAt: string;
+}
+
+export interface FilePage {
+  items: FileRecord[];
+  nextCursor: string | null;
+}
+
+export interface FileCitation {
+  page: number;
+  excerpt: string;
+}
+
+export interface FileAskResult {
+  answer: string;
+  citations: FileCitation[];
+}
+
+export interface FileSearchResult {
+  fileId: string;
+  filename: string;
+  page: number;
+  preview: string;
+  score: number;
+}
+
 export const api = {
   register: (email: string, password: string) =>
     apiRequest("/api/auth/register", { method: "POST", body: JSON.stringify({ email, password }) }),
@@ -213,6 +294,68 @@ export const api = {
 
   previewContext: (params: { snippet: string; bucketId?: string }): Promise<ContextPreview> =>
     apiRequest("/api/context/preview", { method: "POST", body: JSON.stringify(params) }),
+
+  importConversations: (file: File, bucketId: string, platform: string): Promise<{ conversationsQueued: number }> => {
+    const form = new FormData();
+    form.set("file", file);
+    form.set("bucketId", bucketId);
+    form.set("platform", platform);
+    return apiRequest("/api/chat-history/import", { method: "POST", body: form });
+  },
+
+  conversations: (params: { bucketId?: string; cursor?: string; limit?: number } = {}): Promise<ConversationPage> => {
+    const search = new URLSearchParams();
+    if (params.bucketId) search.set("bucketId", params.bucketId);
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    const qs = search.toString();
+    return apiRequest(`/api/chat-history/conversations${qs ? `?${qs}` : ""}`);
+  },
+
+  transcript: (
+    id: string,
+    params: { cursor?: number; limit?: number } = {},
+  ): Promise<{ conversation: Conversation; messages: ChatMessage[]; nextCursor: number | null }> => {
+    const search = new URLSearchParams();
+    if (params.cursor !== undefined) search.set("cursor", String(params.cursor));
+    if (params.limit) search.set("limit", String(params.limit));
+    const qs = search.toString();
+    return apiRequest(`/api/chat-history/conversations/${id}${qs ? `?${qs}` : ""}`);
+  },
+
+  chatSearch: (params: { query: string; bucketId?: string; mode?: "semantic" | "precise" }): Promise<{ results: ChatSearchResult[] }> =>
+    apiRequest("/api/chat-history/search", { method: "POST", body: JSON.stringify(params) }),
+
+  historyUsage: (): Promise<HistoryUsage> => apiRequest("/api/chat-history/usage"),
+
+  monthlyInsight: (month?: string): Promise<{ insight: MonthlyInsight }> =>
+    apiRequest(`/api/chat-history/insights${month ? `?month=${month}` : ""}`),
+
+  uploadFile: (file: File, bucketId: string): Promise<{ file: FileRecord }> => {
+    const form = new FormData();
+    form.set("file", file);
+    form.set("bucketId", bucketId);
+    return apiRequest("/api/files", { method: "POST", body: form });
+  },
+
+  files: (params: { bucketId?: string; cursor?: string; limit?: number } = {}): Promise<FilePage> => {
+    const search = new URLSearchParams();
+    if (params.bucketId) search.set("bucketId", params.bucketId);
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    const qs = search.toString();
+    return apiRequest(`/api/files${qs ? `?${qs}` : ""}`);
+  },
+
+  file: (id: string): Promise<{ file: FileRecord }> => apiRequest(`/api/files/${id}`),
+
+  deleteFile: (id: string) => apiRequest(`/api/files/${id}`, { method: "DELETE" }),
+
+  askFile: (id: string, question: string): Promise<FileAskResult> =>
+    apiRequest(`/api/files/${id}/ask`, { method: "POST", body: JSON.stringify({ question }) }),
+
+  fileSearch: (params: { query: string; bucketId?: string }): Promise<{ results: FileSearchResult[] }> =>
+    apiRequest("/api/files/search", { method: "POST", body: JSON.stringify(params) }),
 };
 
 export function memoryImageSrc(memory: Memory): string | null {

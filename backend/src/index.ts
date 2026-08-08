@@ -2,12 +2,18 @@ import { createApp } from './app';
 import { env } from './shared/env';
 import { logger } from './shared/logger';
 import { prisma } from './shared/prisma';
+import { insightService } from './modules/chat-history/insight.service';
 
 const app = createApp();
 
 const server = app.listen(env.port, () => {
   logger.info(`AI Memory backend listening on port ${env.port}`);
 });
+
+// Phase 5's monthly-insights digest (US-ARC-06) — registered once at process startup, not
+// per-request. See job-runner.provider.ts for why this is an in-process interval rather than
+// real cron infra this phase.
+insightService.registerScheduledJob();
 
 // Without this, a deploy/restart kills in-flight requests and leaves Postgres connections open
 // until they time out — SIGTERM is what container orchestrators (Docker, Kubernetes, etc.) send

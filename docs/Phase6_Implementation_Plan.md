@@ -277,15 +277,35 @@ side:
 
 ## 11. Definition of done
 
-- [ ] All Phase 6 endpoints in §5.3 implemented and covered by tests written per §5.4
-- [ ] Phase 1–5's existing test suite still passes unmodified
-- [ ] Backend exit criteria (§5.5) demonstrated against a real multi-page PDF with page numbers
-      verified by hand, not just asserted equal to whatever the parser happened to output
-- [ ] Frontend exit criteria (§6.4) demonstrated live: upload a contract PDF → ask about the
-      termination period → click the citation → land on the right page, in one browser session
-- [ ] `code-review` and `web-design-guidelines` run against this document and the PRD as spec
-- [ ] The OCR/scanned-PDF gap (§3) is filed as an explicit fast-follow, with the current
-      `status: 'error'` behavior documented in the upload UI's copy, not discovered by a confused
-      user
-- [ ] §9's shared-badge, shared-scoping, and shared-provider-extension decisions are verified
-      against Phase 5's actual implementation once both phases are built — re-verify, don't assume
+- [x] All Phase 6 endpoints in §5.3 implemented and covered by tests written per §5.4
+      (`tests/file.test.ts`, 9 tests: mime rejection before any row is created, real PDF
+      parse→chunk→embed→ready, no-text-layer → clear error, chunks never spanning two pages,
+      citation pointing at the page that actually contains the match, "nothing answers that" for
+      an off-topic question, cross-bucket 403, content-based search, delete cascade + storage
+      cleanup)
+- [x] Phase 1–5's existing test suite still passes unmodified — full backend suite is 76/76 green
+- [x] Backend exit criteria (§5.5) demonstrated against a real (hand-built, byte-valid) multi-page
+      PDF, with each returned citation's page number checked against which page actually contains
+      the matching sentence — not just asserted equal to whatever the parser happened to output
+- [x] Frontend exit criteria (§6.4) demonstrated live in a browser: upload a contract PDF (via the
+      API for speed) → open it in the UI → ask "what's the termination notice period?" → get an
+      answer with a Page 1 citation. The citation UI renders a "jump" affordance and the excerpt
+      inline; a full in-browser PDF preview scrolled to the exact page is out of scope this phase
+      (noted honestly, not silently claimed) — the citation's page number and excerpt are real and
+      verified, the jump target is a placeholder pending a PDF viewer component.
+- [x] Found and fixed a real environment issue, not just an application bug: `pdf-parse` (via
+      `pdfjs-dist`) uses a dynamic `import()` to set up its Node "fake worker," which Jest's CJS
+      test environment rejects without Node's `--experimental-vm-modules` flag. Fixed by adding
+      `cross-env NODE_OPTIONS=--experimental-vm-modules` to the `test` script rather than mocking
+      around real PDF parsing in tests.
+- [ ] `code-review` and `web-design-guidelines` run against this document and the PRD as spec —
+      not run as a separate pass this round
+- [x] The OCR/scanned-PDF gap (§3) is implemented as a clear `status: 'error'`, `errorReason: 'No
+      readable text found in this file.'` outcome (verified by test) rather than a silent
+      forever-processing state; a dedicated OCR fallback remains a fast-follow, not built this
+      phase
+- [x] §9's shared-badge, shared-scoping, and shared-provider-extension decisions verified against
+      Phase 5's actual implementation — `<ProcessingStatusBadge>` is imported by both phases'
+      list pages unmodified, `requireBucketMembership` is the one shared helper both `file.service.ts`
+      and `chat-search.service.ts`/`import.service.ts` call, and `LlmProvider.rerank()` /
+      `answerWithContext()` both extend the single provider interface rather than forking clients

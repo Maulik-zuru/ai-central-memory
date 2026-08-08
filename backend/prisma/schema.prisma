@@ -32,6 +32,9 @@ model User {
   memories      Memory[]
   suggestions   MemorySuggestion[]
   categories    Category[]
+  conversations Conversation[]
+  monthlyInsights MonthlyInsight[]
+  files         File[]
 }
 
 model Session {
@@ -103,6 +106,8 @@ model Bucket {
   memories  Memory[]
   members   BucketMember[]
   invites   BucketInvite[]
+  conversations Conversation[]
+  files     File[]
 
   @@index([userId])
   @@index([parentId])
@@ -205,4 +210,104 @@ model Category {
 
   @@unique([userId, label])
   @@index([userId])
+}
+
+// --- Phase 5: Chat History Archive (Import + Sync) -----------------------------------------
+// See docs/Phase5_Implementation_Plan.md §5.1. Idempotency key is (bucketId, platform,
+// externalId) when the export provides a platform id, else (bucketId, platform, contentHash) —
+// US-ARC-02: re-importing the same export must never create a duplicate row.
+model Conversation {
+  id           String    @id @default(cuid())
+  bucketId     String
+  bucket       Bucket    @relation(fields: [bucketId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform     String
+  externalId   String?
+  contentHash  String
+  title        String
+  summary      String?
+  messageCount Int       @default(0)
+  importedAt   DateTime  @default(now())
+  lastSyncedAt DateTime  @default(now())
+  status       String    @default("importing") // "importing" | "ready" | "error"
+  errorReason  String?
+  syncCursor   Int       @default(0)
+  messages     Message[]
+
+  @@unique([bucketId, platform, externalId])
+  @@unique([bucketId, platform, contentHash])
+  @@index([bucketId])
+  @@index([userId])
+}
+
+model Message {
+  id             String         @id @default(cuid())
+  conversationId String
+  conversation   Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // "user" | "assistant"
+  content        String
+  position       Int
+  createdAt      DateTime
+  chunks         MessageChunk[]
+
+  @@unique([conversationId, position])
+  @@index([conversationId])
+}
+
+model MessageChunk {
+  id        String                       @id @default(cuid())
+  messageId String
+  message   Message                      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  content   String
+  embedding Unsupported("vector(1536)")?
+  createdAt DateTime                     @default(now())
+
+  @@index([messageId])
+}
+
+model MonthlyInsight {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  month     String // "2026-07"
+  summary   String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, month])
+}
+
+// --- Phase 6: Files & Document Knowledge Base (RAG) ----------------------------------------
+// See docs/Phase6_Implementation_Plan.md §5.1. `storageKey` (not a URL) mirrors
+// Memory's image-storage contract exactly, so a future StorageProvider swap needs no backfill.
+model File {
+  id          String      @id @default(cuid())
+  bucketId    String
+  bucket      Bucket      @relation(fields: [bucketId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  filename    String
+  mimeType    String
+  sizeBytes   Int
+  storageKey  String
+  status      String      @default("processing") // "processing" | "ready" | "error"
+  errorReason String?
+  pageCount   Int?
+  createdAt   DateTime    @default(now())
+  chunks      FileChunk[]
+
+  @@index([bucketId])
+  @@index([userId])
+}
+
+model FileChunk {
+  id        String                       @id @default(cuid())
+  fileId    String
+  file      File                         @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  page      Int
+  content   String
+  embedding Unsupported("vector(1536)")?
+  createdAt DateTime                     @default(now())
+
+  @@index([fileId])
 }

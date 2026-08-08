@@ -53,3 +53,21 @@ export async function accessibleBucketIds(userId: string): Promise<string[]> {
   const memberships = await prisma.bucketMember.findMany({ where: { userId }, select: { bucketId: true } });
   return memberships.map((m) => m.bucketId);
 }
+
+/** Service-layer membership check for self-defending services (bucketAccess.ts's module
+ * comment's discipline: a service re-checks even when route middleware already did). Phase 5/6
+ * import this instead of each redefining their own copy of the check memory.service.ts already
+ * has inline — the one place this specific shape of check lives going forward. */
+export async function requireBucketMembership(
+  userId: string,
+  bucketId: string,
+  minRole: BucketRole,
+): Promise<{ bucketId: string; role: BucketRole }> {
+  const membership = await prisma.bucketMember.findUnique({
+    where: { bucketId_userId: { bucketId, userId } },
+  });
+  if (!membership || ROLE_RANK[membership.role as BucketRole] < ROLE_RANK[minRole]) {
+    throw AppError.forbidden('You do not have access to this bucket', 'BUCKET_ACCESS_DENIED');
+  }
+  return { bucketId, role: membership.role as BucketRole };
+}

@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import path from 'path';
-import { mkdir, unlink, writeFile } from 'fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
 
 export interface StoredFile {
   key: string;
@@ -10,6 +10,9 @@ export interface StoredFile {
 export interface StorageProvider {
   put(buffer: Buffer, filename: string): Promise<StoredFile>;
   delete(key: string): Promise<void>;
+  /** Reads the stored bytes back — Phase 6's document parser needs the raw file, not just its
+   * public URL (image memories never needed this; they're only ever served, never re-read). */
+  get(key: string): Promise<Buffer>;
 }
 
 const UPLOAD_DIR = path.join(__dirname, '../../../uploads');
@@ -31,6 +34,10 @@ export const localDiskStorageProvider: StorageProvider = {
     await unlink(path.join(UPLOAD_DIR, key)).catch(() => {
       // Already gone — deleting a memory whose image was never fully written is not an error.
     });
+  },
+
+  async get(key) {
+    return readFile(path.join(UPLOAD_DIR, key));
   },
 };
 
