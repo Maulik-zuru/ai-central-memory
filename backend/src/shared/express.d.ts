@@ -1,3 +1,5 @@
+import type { Logger } from 'pino';
+
 export {};
 
 declare global {
@@ -10,6 +12,7 @@ declare global {
         apiKeyId?: string;
         scopes?: string[];
       };
+      log: Logger;
     }
   }
 }

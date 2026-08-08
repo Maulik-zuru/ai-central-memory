@@ -55,6 +55,23 @@ npm run dev              # http://localhost:3000
 5. Settings → Sessions shows your active session; Settings → Privacy has the auto-capture
    consent toggles.
 
+## Production-hardening pass
+
+Applied against `nodejs-best-practices`, `nodejs-backend-patterns`, `vercel-react-best-practices`,
+and `vercel-composition-patterns`:
+
+- **Backend:** structured request/error logging (pino + pino-http, with auth headers/cookies
+  redacted), gzip compression, a DB-backed `/api/health` check, a request body size cap, `trust
+  proxy` for correct client IPs behind a load balancer, and graceful shutdown on
+  `SIGTERM`/`SIGINT` (drains in-flight requests, disconnects Prisma, force-exits after a timeout).
+- **Frontend:** React 19 idiomatic components (`ref` as a plain prop instead of `forwardRef`), and
+  an optimistic auth check in `src/proxy.ts` that redirects at the edge before a page ships to the
+  browser — the same real authorization still happens client-side and on every API call; the proxy
+  only removes the flash of the wrong screen on load/reload.
+- A real bug surfaced and fixed during this pass: the refresh cookie was scoped to
+  `Path=/api/auth`, which made it invisible to the frontend's own routes and broke the proxy check
+  entirely. It's now `Path=/`, with a regression test in `backend/tests/auth.test.ts` asserting it.
+
 ## What's deferred
 
 Memory/bucket/chat-archive/file/Ask features, real Google OAuth credentials, Stripe billing, and

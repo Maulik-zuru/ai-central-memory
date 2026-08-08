@@ -9,13 +9,18 @@ function requestMeta(req: Request) {
 const REFRESH_COOKIE = 'refreshToken';
 const isProd = process.env.NODE_ENV === 'production';
 
+// Path must be '/' rather than scoped to '/api/auth': the frontend's own proxy.ts does an
+// optimistic "is there a session cookie" check on every request to the Next.js server, and a
+// cookie is only ever sent for requests whose path matches the cookie's Path prefix. Scoping it
+// to '/api/auth' would make it invisible to anything outside that one route on this origin —
+// httpOnly already prevents JS access, so widening Path costs nothing security-wise.
 function setRefreshCookie(res: Response, token: string) {
   res.cookie(REFRESH_COOKIE, token, {
     httpOnly: true,
     secure: isProd,
     sameSite: 'lax',
     maxAge: 30 * 24 * 60 * 60 * 1000,
-    path: '/api/auth',
+    path: '/',
   });
 }
 
@@ -46,7 +51,7 @@ export const authController = {
   async logout(req: Request, res: Response) {
     const raw = req.cookies?.[REFRESH_COOKIE] ?? req.body?.refreshToken;
     if (raw) await authService.logout(raw);
-    res.clearCookie(REFRESH_COOKIE, { path: '/api/auth' });
+    res.clearCookie(REFRESH_COOKIE, { path: '/' });
     res.status(204).send();
   },
 

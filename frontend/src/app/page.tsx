@@ -1,16 +1,10 @@
-"use client";
-
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { useSession } from "@/lib/use-session";
-
+// proxy.ts intercepts "/" before this ever renders (redirecting to /dashboard or /login based on
+// the optimistic session-cookie check). This is just the fallback shown for the instant between
+// request and redirect, or if proxy.ts is ever bypassed.
 export default function RootPage() {
-  const router = useRouter();
-  const { isLoading, isAuthenticated } = useSession();
-
-  useEffect(() => {
-    if (!isLoading) router.replace(isAuthenticated ? "/dashboard" : "/login");
-  }, [isLoading, isAuthenticated, router]);
-
-  return null;
+  return (
+    <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+      Redirecting…
+    </div>
+  );
 }

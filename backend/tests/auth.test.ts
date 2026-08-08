@@ -18,6 +18,13 @@ describe('Auth (US-ACC-01)', () => {
     expect(res.headers['set-cookie']?.[0]).toMatch(/refreshToken=/);
   });
 
+  it('scopes the refresh cookie to Path=/ so the frontend proxy can read it on any route', async () => {
+    // Regression guard: a narrower path (e.g. /api/auth) is invisible to requests the browser
+    // makes to the frontend's own routes, breaking the optimistic auth check in proxy.ts.
+    const res = await request(app).post('/api/auth/register').send(validUser);
+    expect(res.headers['set-cookie']?.[0]).toMatch(/Path=\//);
+  });
+
   it('rejects a weak password before touching the database', async () => {
     const res = await request(app).post('/api/auth/register').send({ email: 'x@example.com', password: 'short' });
     expect(res.status).toBe(400);

@@ -1,9 +1,12 @@
 import { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { AppError } from './errors';
+import { logger } from './logger';
 
 // Centralized error shape so every client (dashboard, API consumers) parses errors the same way.
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+// Operational errors (AppError, validation) are expected and not logged as failures; anything else
+// is logged with full context — the response body never leaks internals (nodejs-best-practices §4).
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({ error: { code: err.code, message: err.message } });
   }
@@ -18,9 +21,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     });
   }
 
-  // eslint-disable-next-line no-console
-  console.error(err);
-  return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong' } });
+  (req.log ?? logger).error({ err, method: req.method, url: req.url }, 'Unhandled error');
+  const isProd = process.env.NODE_ENV === 'production';
+  return res.status(500).json({
+    error: { code: 'INTERNAL_ERROR', message: isProd ? 'Something went wrong' : (err as Error)?.message },
+  });
 }
 
 export function notFoundHandler(_req: Request, res: Response) {
