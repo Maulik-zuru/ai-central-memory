@@ -21,6 +21,8 @@ import { contextRouter } from './modules/context/context.routes';
 import { categoryRouter } from './modules/category/category.routes';
 import { chatHistoryRouter } from './modules/chat-history/chat-history.routes';
 import { fileRouter } from './modules/file/file.routes';
+import { askRouter } from './modules/ask/ask.routes';
+import { extensionRouter } from './modules/extension/extension.routes';
 
 export function createApp() {
   const app = express();
@@ -74,6 +76,8 @@ export function createApp() {
   app.use('/api/categories', categoryRouter);
   app.use('/api/chat-history', chatHistoryRouter);
   app.use('/api/files', fileRouter);
+  app.use('/api/ask', askRouter);
+  app.use('/api/extension', extensionRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Plus, Trash2 } from "lucide-react";
+import { Copy, Plus, Puzzle, Trash2 } from "lucide-react";
 import { api, type ApiKey } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -146,12 +147,66 @@ function RevokeKeyDialog({ apiKey }: { apiKey: ApiKey }) {
   );
 }
 
+// The one dashboard-side, session-authenticated step in the extension pairing flow
+// (docs/Phase8_BrowserExtension_Implementation_Plan.md §5.2): an explicit, visible confirm click,
+// never an automatic claim on page load. Reached via /dashboard/settings/api-keys?pair=<code>,
+// which the extension's popup opens after starting a pairing code.
+function ExtensionPairingBanner() {
+  const searchParams = useSearchParams();
+  const code = searchParams.get("pair");
+  const [dismissed, setDismissed] = useState(false);
+  const queryClient = useQueryClient();
+
+  const claim = useMutation({
+    mutationFn: () => api.claimExtensionPairing(code!),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["apiKeys"] }),
+  });
+
+  if (!code || dismissed) return null;
+
+  return (
+    <Card className="border-primary/40">
+      <CardHeader className="flex-row items-center gap-3 space-y-0">
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-accent">
+          <Puzzle className="h-4 w-4 text-accent-foreground" />
+        </div>
+        <div>
+          <CardTitle className="text-base">Connect this browser extension?</CardTitle>
+          <CardDescription>
+            It will be able to save and search memories, and preview context — never manage your API keys, billing,
+            or account.
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {claim.isError && <Alert variant="destructive">This pairing code is invalid or has expired.</Alert>}
+        {claim.isSuccess ? (
+          <p className="text-sm text-success">Connected — you can close this tab and return to the extension.</p>
+        ) : (
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setDismissed(true)}>
+              Cancel
+            </Button>
+            <Button disabled={claim.isPending} onClick={() => claim.mutate()}>
+              {claim.isPending ? "Connecting…" : "Connect"}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ApiKeysPage() {
   const { data, isLoading } = useQuery({ queryKey: ["apiKeys"], queryFn: api.apiKeys });
   const keys = data?.apiKeys ?? [];
 
   return (
-    <Card>
+    <div className="flex flex-col gap-4">
+      <Suspense fallback={null}>
+        <ExtensionPairingBanner />
+      </Suspense>
+      <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
         <div>
           <CardTitle>API keys</CardTitle>
@@ -189,5 +244,6 @@ export default function ApiKeysPage() {
         </div>
       </CardContent>
     </Card>
+    </div>
   );
 }

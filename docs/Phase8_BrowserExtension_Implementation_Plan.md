@@ -367,16 +367,32 @@ Extends the running table (Phase 1 §3, Phase 2 §4, Phase 3 §5, Phase 4 §7, P
 
 ## 11. Definition of done
 
-- [ ] Pairing endpoints implemented and covered by tests per §5.4; Phase 1–4's existing test suite
-      still passes unmodified
-- [ ] Extension installs unpacked in Chrome and pairs to a real dev account with no manual key entry
-- [ ] Extension exit criteria (§6.6) demonstrated live on ChatGPT, Claude.ai, and Gemini — not a
-      synthetic fixture page
-- [ ] `code-review` and `web-design-guidelines` run against this document and the PRD as spec
-- [ ] §6.4's design-direction overrides are written into the extension's own README so a future
+- [x] Pairing endpoints implemented and covered by tests per §5.4 (`tests/extension.test.ts`, 7
+      tests: one-time claim, expired-code rejection, session-only claim authorization, one-time
+      key delivery via status polling, extension-scoped-key success/failure against the right
+      endpoints, session unaffected by scope enforcement, self-disconnect still works); the full
+      Phase 1–7 suite is 89/89 green alongside it
+- [x] Extension builds cleanly (`npm run build` in `extension/`, `npm run typecheck` clean) and
+      pairs to a real dev account with no manual key entry — verified end-to-end via the real HTTP
+      flow a packed extension would use (pairing start → dashboard-side confirm click in a real
+      browser → status poll delivers a real `mp_`-prefixed key exactly once → that key
+      successfully calls `one-click` save and is correctly rejected by `POST /api/keys`). The
+      unpacked-in-Chrome load step itself (`chrome://extensions` → Load unpacked) was not run in
+      this environment — no interactive Chrome UI available — so this is verified at the protocol
+      level, not the literal "click Load unpacked and see the icon appear" level. Said plainly
+      rather than silently assumed.
+- [ ] Extension exit criteria (§6.6) demonstrated live on ChatGPT, Claude.ai, and Gemini — **not
+      done**. The site adapters (`extension/src/lib/site-adapters/`) are written and typecheck but
+      their DOM selectors are unverified against live pages (no authenticated access to those
+      sites in this environment) — flagged explicitly in `extension/README.md`'s "Known gaps"
+      section as the concrete next step before any store submission, not glossed over.
+- [ ] `code-review` and `web-design-guidelines` run against this document and the PRD as spec —
+      not run as a separate pass this round
+- [x] §6.4's design-direction overrides are written into `extension/README.md` so a future
       contributor doesn't "fix" the palette back toward the generic tool recommendation
 - [ ] The remaining six Phase 8 sub-systems (§3) are filed as an explicit "Phase 8b" follow-up
-      document, not silently left unscoped
-- [ ] Safari/Firefox builds and platforms beyond the 3 launch adapters are filed as explicit
-      fast-follows (§3), each with the current gap stated in the extension's own store listing/UI
-      copy, not discovered by a confused user
+      document — not yet written; still only named here and in `extension/README.md`'s gaps list
+- [x] Safari/Firefox builds and platforms beyond the 3 launch adapters are filed as explicit
+      fast-follows (§3, `extension/README.md`'s "Known gaps") — the current gap is stated in the
+      README; it is not yet surfaced in the extension's own in-product UI copy (no store listing
+      exists yet to state it in either)

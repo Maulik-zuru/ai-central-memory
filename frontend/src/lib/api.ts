@@ -189,6 +189,43 @@ export interface FileSearchResult {
   score: number;
 }
 
+export type AskMode = "memories" | "chat_history" | "files" | "all";
+export type CitationSourceType = "memory" | "message" | "file";
+
+export interface AskCitation {
+  sourceType: CitationSourceType;
+  sourceId: string;
+  snippet: string;
+  meta: Record<string, unknown>;
+}
+
+export interface AskMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  mode: AskMode | null;
+  citations: AskCitation[] | null;
+  position: number;
+  createdAt: string;
+}
+
+export interface AskConversation {
+  id: string;
+  bucketId: string | null;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AskConversationDetail extends AskConversation {
+  messages: AskMessage[];
+}
+
+export interface AskResult {
+  conversationId: string;
+  message: { id: string; content: string; citations: AskCitation[] };
+}
+
 export const api = {
   register: (email: string, password: string) =>
     apiRequest("/api/auth/register", { method: "POST", body: JSON.stringify({ email, password }) }),
@@ -356,6 +393,22 @@ export const api = {
 
   fileSearch: (params: { query: string; bucketId?: string }): Promise<{ results: FileSearchResult[] }> =>
     apiRequest("/api/files/search", { method: "POST", body: JSON.stringify(params) }),
+
+  ask: (params: { conversationId?: string; question: string; mode: AskMode; bucketId?: string }): Promise<AskResult> =>
+    apiRequest("/api/ask", { method: "POST", body: JSON.stringify(params) }),
+
+  askThreads: (params: { cursor?: string; limit?: number } = {}): Promise<{ items: AskConversation[]; nextCursor: string | null }> => {
+    const search = new URLSearchParams();
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    const qs = search.toString();
+    return apiRequest(`/api/ask/threads${qs ? `?${qs}` : ""}`);
+  },
+
+  askThread: (id: string): Promise<{ conversation: AskConversationDetail }> => apiRequest(`/api/ask/threads/${id}`),
+
+  claimExtensionPairing: (code: string): Promise<{ apiKeyId: string }> =>
+    apiRequest("/api/extension/pairing/claim", { method: "POST", body: JSON.stringify({ code }) }),
 };
 
 export function memoryImageSrc(memory: Memory): string | null {

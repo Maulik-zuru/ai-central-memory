@@ -14,6 +14,18 @@ export const authRateLimit = rateLimit({
   message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts, please try again later' } },
 });
 
+// Extension pairing has no authenticated identity yet (start/status are called before any user
+// is known) — same shape as authRateLimit, IP-keyed, guarding the same brute-force surface a
+// short unauthenticated code otherwise invites (Phase8_BrowserExtension_Implementation_Plan.md
+// §5.2).
+export const pairingRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts, please try again later' } },
+});
+
 // General per-identity limit applied after authentication, keyed by user id when available so one
 // user's traffic can't starve another's, falling back to IP for unauthenticated routes.
 export const apiRateLimit = rateLimit({

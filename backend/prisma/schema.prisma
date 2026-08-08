@@ -35,6 +35,8 @@ model User {
   conversations Conversation[]
   monthlyInsights MonthlyInsight[]
   files         File[]
+  askConversations AskConversation[]
+  extensionPairingCodes ExtensionPairingCode[]
 }
 
 model Session {
@@ -108,6 +110,7 @@ model Bucket {
   invites   BucketInvite[]
   conversations Conversation[]
   files     File[]
+  askConversations AskConversation[]
 
   @@index([userId])
   @@index([parentId])
@@ -310,4 +313,60 @@ model FileChunk {
   createdAt DateTime                     @default(now())
 
   @@index([fileId])
+}
+
+// --- Phase 7: The "Ask" Unified Query System ------------------------------------------------
+// See docs/Phase7_Implementation_Plan.md §5.1. Deliberately separate from Phase 5's
+// Conversation/Message (an *imported* read-only archive) — an AskConversation is an app-native
+// thread the user has with the platform itself.
+model AskConversation {
+  id        String       @id @default(cuid())
+  bucketId  String? // null means "asked across every bucket the user could see"
+  bucket    Bucket?      @relation(fields: [bucketId], references: [id], onDelete: SetNull)
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  messages  AskMessage[]
+
+  @@index([userId])
+  @@index([bucketId])
+}
+
+model AskMessage {
+  id             String          @id @default(cuid())
+  conversationId String
+  conversation   AskConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // "user" | "assistant"
+  content        String
+  mode           String? // "memories" | "chat_history" | "files" | "all" — set on user turns
+  citations      Json? // Citation[] — set on assistant turns, null on user turns
+  position       Int
+  createdAt      DateTime        @default(now())
+
+  @@unique([conversationId, position])
+  @@index([conversationId])
+}
+
+// --- Phase 8 (extension slice): pairing ------------------------------------------------------
+// See docs/Phase8_BrowserExtension_Implementation_Plan.md §5.1. Short-lived, claimed once by an
+// authenticated dashboard session — never issues an ApiKey directly, no special exception to
+// apiKeyService.issue()'s existing "caller never sees keyHash again" rule.
+model ExtensionPairingCode {
+  id           String    @id @default(cuid())
+  code         String    @unique
+  userId       String?
+  user         User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  consumedAt   DateTime?
+  // Holds the newly-issued raw ApiKey value only transiently, between claim() (dashboard) and
+  // the extension's first status() poll — the one place this system ever persists a raw key,
+  // and only for the seconds it takes the extension to poll it. Cleared to null (deliveredAt
+  // set) the instant it's read, so a replayed poll can never fetch it twice.
+  deliveredKey String?
+  deliveredAt  DateTime?
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+
+  @@index([code])
 }

@@ -17,6 +17,19 @@ interface CandidateRow {
   distance: number;
 }
 
+// Full-content candidate row for Ask's fan-out (Phase7_Implementation_Plan.md §4) — the same
+// best-chunk-per-conversation query `search()` already runs, exported separately so Ask gets
+// untruncated content and message position (for citation deep-linking) instead of the
+// already-truncated-to-preview shape search() returns over HTTP.
+export interface TopCandidate {
+  chunkId: string;
+  conversationId: string;
+  title: string;
+  content: string;
+  position: number;
+  distance: number;
+}
+
 export interface ChatSearchResult {
   conversationId: string;
   title: string;
@@ -31,6 +44,27 @@ function cacheKey(userId: string, bucketId: string | undefined, mode: string, qu
 }
 
 export const chatSearchService = {
+  async topCandidates(bucketIds: string[], embedding: number[], limit = CANDIDATE_LIMIT): Promise<TopCandidate[]> {
+    if (bucketIds.length === 0) return [];
+    const vectorLiteral = toVectorLiteral(embedding);
+
+    const rows = await prisma.$queryRaw<
+      { chunkId: string; conversationId: string; title: string; content: string; position: number; distance: number }[]
+    >`
+      SELECT DISTINCT ON (c.id) mc.id AS "chunkId", c.id AS "conversationId", c.title,
+        mc.content, m.position,
+        (mc.embedding <=> ${vectorLiteral}::vector) AS distance
+      FROM "MessageChunk" mc
+      JOIN "Message" m ON m.id = mc."messageId"
+      JOIN "Conversation" c ON c.id = m."conversationId"
+      WHERE c."bucketId" IN (${Prisma.join(bucketIds)})
+        AND mc.embedding IS NOT NULL
+      ORDER BY c.id, distance ASC
+    `;
+
+    return rows.sort((a, b) => a.distance - b.distance).slice(0, limit);
+  },
+
   async search(
     userId: string,
     params: { query: string; bucketId?: string; mode: 'semantic' | 'precise' },
