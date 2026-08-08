@@ -60,6 +60,14 @@ export const authService = {
           create: { name: 'Personal', isDefault: true },
         },
       },
+      include: { buckets: true },
+    });
+    // A separate step, not a nested write: BucketMember.userId can't self-reference the User
+    // being created in the same nested-write call. The owner row is required since Phase 3
+    // authorization checks membership, never Bucket.userId — see
+    // docs/Phase3_Implementation_Plan.md §6.1.
+    await prisma.bucketMember.create({
+      data: { bucketId: user.buckets[0].id, userId: user.id, role: 'owner', acceptedAt: new Date() },
     });
 
     await auditService.record(user.id, 'user.register', { type: 'User', id: user.id });
@@ -83,10 +91,14 @@ export const authService = {
 
   async loginWithGoogle(profile: { googleId: string; email: string }, meta: RequestMeta = {}): Promise<AuthResult> {
     let user = await prisma.user.findUnique({ where: { oauthGoogleId: profile.googleId } });
+    let isNewUser = false;
 
     if (!user) {
       // Link by email if the account already exists, otherwise provision a new one — either way,
       // no separate password step (US-ACC-01 AC).
+      const existingByEmail = await prisma.user.findUnique({ where: { email: profile.email } });
+      isNewUser = !existingByEmail;
+
       user = await prisma.user.upsert({
         where: { email: profile.email },
         update: { oauthGoogleId: profile.googleId },
@@ -105,6 +117,15 @@ export const authService = {
           },
         },
       });
+
+      if (isNewUser) {
+        // See register()'s comment: BucketMember.userId can't self-reference the user being
+        // created in the same nested-write call.
+        const bucket = await prisma.bucket.findFirstOrThrow({ where: { userId: user.id, isDefault: true } });
+        await prisma.bucketMember.create({
+          data: { bucketId: bucket.id, userId: user.id, role: 'owner', acceptedAt: new Date() },
+        });
+      }
     }
 
     await auditService.record(user.id, 'user.login.google', { type: 'User', id: user.id });

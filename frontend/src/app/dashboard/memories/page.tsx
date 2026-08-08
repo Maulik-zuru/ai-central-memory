@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Search, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
@@ -14,10 +15,15 @@ import { Brain } from "lucide-react";
 
 export default function MemoriesPage() {
   const [q, setQ] = useState("");
+  const searchParams = useSearchParams();
+  const bucketId = searchParams.get("bucket") ?? undefined;
+
+  const buckets = useQuery({ queryKey: ["buckets"], queryFn: api.buckets });
+  const activeBucket = buckets.data?.buckets.find((b) => b.id === bucketId);
 
   const memories = useQuery({
-    queryKey: ["memories", { q }],
-    queryFn: () => api.memories({ q: q || undefined, limit: 50 }),
+    queryKey: ["memories", { q, bucketId }],
+    queryFn: () => api.memories({ q: q || undefined, limit: 50, bucketId }),
     placeholderData: (prev) => prev,
   });
 
@@ -26,6 +32,10 @@ export default function MemoriesPage() {
 
   return (
     <div className="flex flex-1 flex-col gap-4">
+      {bucketId && (
+        <h1 className="text-xl">{activeBucket ? activeBucket.name : "Bucket"}</h1>
+      )}
+
       <div className="flex items-center justify-between gap-4">
         <div className="relative max-w-sm flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -43,7 +53,7 @@ export default function MemoriesPage() {
               {pendingCount > 0 ? `${pendingCount} suggestion${pendingCount === 1 ? "" : "s"}` : "No suggestions"}
             </Badge>
           </Link>
-          <CreateMemoryDialog />
+          <CreateMemoryDialog bucketId={bucketId} />
         </div>
       </div>
 

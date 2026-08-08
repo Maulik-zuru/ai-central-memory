@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { AppError } from '../../shared/errors';
 import { memoryService } from './memory.service';
 import { createMemorySchema, listMemoriesSchema, mergeMemoriesSchema, updateMemorySchema } from './memory.types';
+import { moveMemorySchema } from '../bucket/bucket.types';
 
 function requireAuth(req: Request) {
   if (!req.auth) throw AppError.unauthorized();
@@ -11,8 +12,8 @@ function requireAuth(req: Request) {
 export const memoryController = {
   async create(req: Request, res: Response) {
     const { userId } = requireAuth(req);
-    const { content } = createMemorySchema.parse(req.body);
-    const memory = await memoryService.create(userId, content, 'manual');
+    const { content, bucketId } = createMemorySchema.parse(req.body);
+    const memory = await memoryService.create(userId, content, 'manual', bucketId);
     res.status(201).json({ memory });
   },
 
@@ -28,10 +29,12 @@ export const memoryController = {
     const file = req.file;
     if (!file) throw AppError.badRequest('An image file is required', 'MISSING_FILE');
     const caption = typeof req.body?.caption === 'string' ? req.body.caption : undefined;
+    const bucketId = typeof req.body?.bucketId === 'string' ? req.body.bucketId : undefined;
     const memory = await memoryService.createImage(
       userId,
       { buffer: file.buffer, filename: file.originalname, mimeType: file.mimetype },
       caption,
+      bucketId,
     );
     res.status(201).json({ memory });
   },
@@ -60,6 +63,13 @@ export const memoryController = {
     const { userId } = requireAuth(req);
     await memoryService.delete(userId, req.params.id);
     res.status(204).send();
+  },
+
+  async move(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { bucketId } = moveMemorySchema.parse(req.body);
+    const memory = await memoryService.move(userId, req.params.id, bucketId);
+    res.status(200).json({ memory });
   },
 
   async merge(req: Request, res: Response) {

@@ -10,6 +10,28 @@ export interface LlmProvider {
   extractMemoryCandidates(snippet: string): Promise<CaptureCandidate[]>;
   /** Produce a fixed-length embedding for similarity search (dimension must match the schema's vector(1536)). */
   embed(text: string): Promise<number[]>;
+  /** Propose a short human-readable label for a new category, seeded from one representative memory. */
+  suggestCategoryLabel(content: string): Promise<string>;
+}
+
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'to', 'of', 'in',
+  'on', 'at', 'for', 'with', 'my', 'me', 'i', 'you', 'your', 'it', 'this', 'that', 'as', 'by',
+  'from', 'has', 'have', 'had', 'not', 'so', 'do', 'does', 'did', 'will', 'would', 'can', 'could',
+]);
+
+// Stub labeling: pick the most frequent non-stopword in the memory, title-case it. Good enough to
+// exercise "a label gets created and reused" without a real LLM configured — see
+// docs/Phase4_Implementation_Plan.md §5.2.
+function stubSuggestCategoryLabel(content: string): string {
+  const words = content.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const counts = new Map<string, number>();
+  for (const word of words) {
+    if (STOPWORDS.has(word) || word.length < 3) continue;
+    counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+  const [top] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] ?? ['general'];
+  return top.charAt(0).toUpperCase() + top.slice(1);
 }
 
 const EMBEDDING_DIM = 1536;
@@ -54,6 +76,9 @@ export const stubLlmProvider: LlmProvider = {
   },
   async embed(text: string) {
     return hashEmbed(text);
+  },
+  async suggestCategoryLabel(content: string) {
+    return stubSuggestCategoryLabel(content);
   },
 };
 
@@ -100,6 +125,32 @@ class AnthropicLlmProvider implements LlmProvider {
     // unless a separate embedding provider (e.g. OpenAI) is configured.
     return hashEmbed(text);
   }
+
+  async suggestCategoryLabel(content: string): Promise<string> {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': this.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-haiku-latest',
+        max_tokens: 16,
+        system: 'Reply with a short (1-3 word) title-case category label for the memory below. No punctuation, no commentary.',
+        messages: [{ role: 'user', content }],
+      }),
+    });
+
+    if (!res.ok) {
+      logger.error({ status: res.status }, 'Anthropic category-label call failed; falling back to stub');
+      return stubSuggestCategoryLabel(content);
+    }
+
+    const body = (await res.json()) as { content?: { text?: string }[] };
+    const label = body.content?.[0]?.text?.trim();
+    return label || stubSuggestCategoryLabel(content);
+  }
 }
 
 class OpenAiEmbeddingProvider {
@@ -142,6 +193,7 @@ export function getLlmProvider(): LlmProvider {
   cached = {
     extractMemoryCandidates: (snippet) => extraction.extractMemoryCandidates(snippet),
     embed: (text) => (embedding ? embedding.embed(text) : Promise.resolve(hashEmbed(text))),
+    suggestCategoryLabel: (content) => extraction.suggestCategoryLabel(content),
   };
   return cached;
 }

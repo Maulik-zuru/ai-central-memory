@@ -1,7 +1,8 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -23,7 +24,16 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const setAuth = useAuthStore((s) => s.setAuth);
 
   const {
@@ -36,7 +46,7 @@ export default function LoginPage() {
     mutationFn: (values: FormValues) => api.login(values.email, values.password),
     onSuccess: (data) => {
       setAuth(data.accessToken, data.user);
-      router.push("/dashboard");
+      router.push(searchParams.get("next") ?? "/dashboard");
     },
   });
 

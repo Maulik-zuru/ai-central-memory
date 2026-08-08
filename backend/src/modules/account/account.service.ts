@@ -17,6 +17,7 @@ export const accountService = {
       googleLinked: Boolean(user.oauthGoogleId),
       createdAt: user.createdAt,
       autoCapture: user.autoCapture as Record<string, boolean>,
+      smartMemoryEnabled: user.smartMemoryEnabled,
       subscription: user.subscription
         ? {
             plan: user.subscription.plan,
@@ -34,5 +35,11 @@ export const accountService = {
     });
     await auditService.record(userId, 'account.autoCapture.update', { type: 'User', id: userId });
     return user.autoCapture as Record<string, boolean>;
+  },
+
+  async updateSmartMemory(userId: string, enabled: boolean) {
+    const user = await prisma.user.update({ where: { id: userId }, data: { smartMemoryEnabled: enabled } });
+    await auditService.record(userId, 'account.smartMemory.update', { type: 'User', id: userId });
+    return user.smartMemoryEnabled;
   },
 };

@@ -14,21 +14,24 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  passwordHash  String?
-  oauthGoogleId String?  @unique
-  planId        String   @default("core")
-  autoCapture   Json     @default("{}") // per-platform auto-capture consent toggles (US-ACC-07)
-  createdAt     DateTime @default(now())
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  passwordHash       String?
+  oauthGoogleId      String?  @unique
+  planId             String   @default("core")
+  autoCapture        Json     @default("{}") // per-platform auto-capture consent toggles (US-ACC-07)
+  smartMemoryEnabled Boolean  @default(true) // Phase 4: US-ADV-01 Smart Mode toggle
+  createdAt          DateTime @default(now())
 
-  apiKeys      ApiKey[]
-  subscription Subscription?
-  auditLogs    AuditLog[]
-  sessions     Session[]
-  buckets      Bucket[]
-  memories     Memory[]
-  suggestions  MemorySuggestion[]
+  apiKeys       ApiKey[]
+  subscription  Subscription?
+  auditLogs     AuditLog[]
+  sessions      Session[]
+  buckets       Bucket[]
+  bucketMembers BucketMember[]
+  memories      Memory[]
+  suggestions   MemorySuggestion[]
+  categories    Category[]
 }
 
 model Session {
@@ -88,35 +91,77 @@ model AuditLog {
 // migration, so Phase 3's sharing/RBAC work is additive instead of a backfill.
 
 model Bucket {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String         @id @default(cuid())
+  userId    String // the creator — always also gets an "owner" BucketMember row (§6.1)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
-  isDefault Boolean  @default(false)
-  createdAt DateTime @default(now())
+  isDefault Boolean        @default(false)
+  parentId  String?
+  parent    Bucket?        @relation("BucketToBucket", fields: [parentId], references: [id], onDelete: SetNull)
+  children  Bucket[]       @relation("BucketToBucket")
+  createdAt DateTime       @default(now())
   memories  Memory[]
+  members   BucketMember[]
+  invites   BucketInvite[]
 
+  @@index([userId])
+  @@index([parentId])
+}
+
+// Phase 3: Buckets & Organization — see docs/Phase3_Implementation_Plan.md §6.1.
+// Every bucket member — including the creator — has a row here; authorization always checks
+// membership, never Bucket.userId, so there is exactly one shape for "can this user do X".
+model BucketMember {
+  id         String    @id @default(cuid())
+  bucketId   String
+  bucket     Bucket    @relation(fields: [bucketId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       String // "owner" | "editor" | "viewer"
+  invitedAt  DateTime  @default(now())
+  acceptedAt DateTime?
+
+  @@unique([bucketId, userId])
   @@index([userId])
 }
 
+model BucketInvite {
+  id         String    @id @default(cuid())
+  bucketId   String
+  bucket     Bucket    @relation(fields: [bucketId], references: [id], onDelete: Cascade)
+  email      String
+  role       String // "editor" | "viewer" — never "owner" via invite
+  tokenHash  String    @unique
+  invitedBy  String
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([bucketId])
+  @@index([email])
+}
+
 model Memory {
-  id        String                       @id @default(cuid())
-  userId    String
-  user      User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  bucketId  String
-  bucket    Bucket                       @relation(fields: [bucketId], references: [id])
-  type      String // "text" | "image"
-  content   String
-  imageUrl  String?
-  source    String // "manual" | "one_click" | "auto"
-  status    String                       @default("active") // "active" | "stale" | "merged" | "deleted"
-  embedding Unsupported("vector(1536)")?
-  createdAt DateTime                     @default(now())
-  updatedAt DateTime                     @updatedAt
-  versions  MemoryVersion[]
+  id         String                       @id @default(cuid())
+  userId     String
+  user       User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bucketId   String
+  bucket     Bucket                       @relation(fields: [bucketId], references: [id])
+  type       String // "text" | "image"
+  content    String
+  imageUrl   String?
+  source     String // "manual" | "one_click" | "auto"
+  status     String                       @default("active") // "active" | "stale" | "merged" | "deleted"
+  embedding  Unsupported("vector(1536)")?
+  categoryId String?
+  category   Category?                    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdAt  DateTime                     @default(now())
+  updatedAt  DateTime                     @updatedAt
+  versions   MemoryVersion[]
 
   @@index([userId, status])
   @@index([bucketId])
+  @@index([categoryId])
 }
 
 model MemoryVersion {
@@ -143,4 +188,21 @@ model MemorySuggestion {
   createdAt    DateTime @default(now())
 
   @@index([userId, status])
+}
+
+// --- Phase 4: Smart Memory & Context Retrieval Engine -------------------------------------
+// See docs/Phase4_Implementation_Plan.md §5.1: categories are scoped per-account (creator), not
+// per-bucket — a category is a property of content, not of organization.
+model Category {
+  id          String                       @id @default(cuid())
+  userId      String
+  user        User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label       String
+  centroid    Unsupported("vector(1536)")?
+  memoryCount Int                          @default(0)
+  createdAt   DateTime                     @default(now())
+  memories    Memory[]
+
+  @@unique([userId, label])
+  @@index([userId])
 }

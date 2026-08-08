@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 
 type Tab = "text" | "image";
 
-export function CreateMemoryDialog() {
+export function CreateMemoryDialog({ bucketId }: { bucketId?: string }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("text");
   const [content, setContent] = useState("");
@@ -40,7 +40,7 @@ export function CreateMemoryDialog() {
   }
 
   const createText = useMutation({
-    mutationFn: () => api.createMemory(content),
+    mutationFn: () => api.createMemory(content, bucketId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["memories"] });
       setOpen(false);
@@ -49,7 +49,7 @@ export function CreateMemoryDialog() {
   });
 
   const createImage = useMutation({
-    mutationFn: () => api.createImageMemory(file!, caption),
+    mutationFn: () => api.createImageMemory(file!, caption, bucketId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["memories"] });
       setOpen(false);

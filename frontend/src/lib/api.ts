@@ -7,6 +7,7 @@ export interface Account {
   googleLinked: boolean;
   createdAt: string;
   autoCapture: Record<string, boolean>;
+  smartMemoryEnabled: boolean;
   subscription: { plan: string; status: string; trialEndsAt: string | null } | null;
 }
 
@@ -64,6 +65,49 @@ export interface Suggestion {
   createdAt: string;
 }
 
+export type BucketRole = "owner" | "editor" | "viewer";
+
+export interface Bucket {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  parentId: string | null;
+  role: BucketRole;
+  createdAt: string;
+}
+
+export interface BucketMember {
+  userId: string;
+  email: string;
+  role: BucketRole;
+  invitedAt: string;
+  acceptedAt: string | null;
+}
+
+export interface Category {
+  id: string;
+  userId: string;
+  label: string;
+  memoryCount: number;
+  createdAt: string;
+}
+
+export interface ContextMemory {
+  id: string;
+  content: string;
+  categoryId: string | null;
+  score: number;
+  createdAt: string;
+}
+
+export interface ContextPreview {
+  smartModeEnabled: boolean;
+  memories: ContextMemory[];
+  actualTokens: number;
+  everythingTokens: number;
+  tokenBudget: number;
+}
+
 export const api = {
   register: (email: string, password: string) =>
     apiRequest("/api/auth/register", { method: "POST", body: JSON.stringify({ email, password }) }),
@@ -78,6 +122,9 @@ export const api = {
   updateAutoCapture: (autoCapture: Record<string, boolean>) =>
     apiRequest("/api/account/auto-capture", { method: "PATCH", body: JSON.stringify({ autoCapture }) }),
 
+  updateSmartMemory: (enabled: boolean): Promise<{ smartMemoryEnabled: boolean }> =>
+    apiRequest("/api/account/smart-memory", { method: "PATCH", body: JSON.stringify({ enabled }) }),
+
   sessions: (): Promise<{ sessions: Session[] }> => apiRequest("/api/account/sessions"),
 
   revokeSession: (id: string) => apiRequest(`/api/account/sessions/${id}`, { method: "DELETE" }),
@@ -89,26 +136,31 @@ export const api = {
 
   revokeApiKey: (id: string) => apiRequest(`/api/keys/${id}`, { method: "DELETE" }),
 
-  memories: (params: { cursor?: string; limit?: number; q?: string } = {}): Promise<MemoryPage> => {
+  memories: (params: { cursor?: string; limit?: number; q?: string; bucketId?: string } = {}): Promise<MemoryPage> => {
     const search = new URLSearchParams();
     if (params.cursor) search.set("cursor", params.cursor);
     if (params.limit) search.set("limit", String(params.limit));
     if (params.q) search.set("q", params.q);
+    if (params.bucketId) search.set("bucketId", params.bucketId);
     const qs = search.toString();
     return apiRequest(`/api/memories${qs ? `?${qs}` : ""}`);
   },
 
   memory: (id: string): Promise<{ memory: Memory }> => apiRequest(`/api/memories/${id}`),
 
-  createMemory: (content: string): Promise<{ memory: Memory }> =>
-    apiRequest("/api/memories", { method: "POST", body: JSON.stringify({ content }) }),
+  createMemory: (content: string, bucketId?: string): Promise<{ memory: Memory }> =>
+    apiRequest("/api/memories", { method: "POST", body: JSON.stringify({ content, bucketId }) }),
 
-  createImageMemory: (file: File, caption: string): Promise<{ memory: Memory }> => {
+  createImageMemory: (file: File, caption: string, bucketId?: string): Promise<{ memory: Memory }> => {
     const form = new FormData();
     form.set("image", file);
     if (caption) form.set("caption", caption);
+    if (bucketId) form.set("bucketId", bucketId);
     return apiRequest("/api/memories/image", { method: "POST", body: form });
   },
+
+  moveMemory: (id: string, bucketId: string): Promise<{ memory: Memory }> =>
+    apiRequest(`/api/memories/${id}/bucket`, { method: "PATCH", body: JSON.stringify({ bucketId }) }),
 
   updateMemory: (id: string, content: string): Promise<{ memory: Memory }> =>
     apiRequest(`/api/memories/${id}`, { method: "PATCH", body: JSON.stringify({ content }) }),
@@ -127,6 +179,40 @@ export const api = {
 
   capture: (snippet: string): Promise<{ suggestions: Suggestion[] }> =>
     apiRequest("/api/capture", { method: "POST", body: JSON.stringify({ snippet }) }),
+
+  buckets: (): Promise<{ buckets: Bucket[] }> => apiRequest("/api/buckets"),
+
+  createBucket: (name: string, parentId?: string): Promise<{ bucket: Bucket }> =>
+    apiRequest("/api/buckets", { method: "POST", body: JSON.stringify({ name, parentId }) }),
+
+  renameBucket: (id: string, name: string): Promise<{ bucket: Bucket }> =>
+    apiRequest(`/api/buckets/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+
+  moveBucket: (id: string, parentId: string | null): Promise<{ bucket: Bucket }> =>
+    apiRequest(`/api/buckets/${id}`, { method: "PATCH", body: JSON.stringify({ parentId }) }),
+
+  deleteBucket: (id: string) => apiRequest(`/api/buckets/${id}`, { method: "DELETE" }),
+
+  bucketMembers: (id: string): Promise<{ members: BucketMember[] }> => apiRequest(`/api/buckets/${id}/members`),
+
+  inviteToBucket: (id: string, email: string, role: "editor" | "viewer") =>
+    apiRequest(`/api/buckets/${id}/invites`, { method: "POST", body: JSON.stringify({ email, role }) }),
+
+  changeMemberRole: (bucketId: string, userId: string, role: "editor" | "viewer") =>
+    apiRequest(`/api/buckets/${bucketId}/members/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
+
+  removeMember: (bucketId: string, userId: string) =>
+    apiRequest(`/api/buckets/${bucketId}/members/${userId}`, { method: "DELETE" }),
+
+  acceptInvite: (token: string) => apiRequest(`/api/invites/${token}/accept`, { method: "POST" }),
+
+  categories: (): Promise<{ categories: Category[] }> => apiRequest("/api/categories"),
+
+  renameCategory: (id: string, label: string): Promise<{ category: Category }> =>
+    apiRequest(`/api/categories/${id}`, { method: "PATCH", body: JSON.stringify({ label }) }),
+
+  previewContext: (params: { snippet: string; bucketId?: string }): Promise<ContextPreview> =>
+    apiRequest("/api/context/preview", { method: "POST", body: JSON.stringify(params) }),
 };
 
 export function memoryImageSrc(memory: Memory): string | null {

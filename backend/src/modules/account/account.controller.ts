@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { accountService } from './account.service';
-import { updateAutoCaptureSchema } from './account.types';
+import { updateAutoCaptureSchema, updateSmartMemorySchema } from './account.types';
 import { sessionService } from '../session/session.service';
 import { AppError } from '../../shared/errors';
 
@@ -21,6 +21,13 @@ export const accountController = {
     const { autoCapture } = updateAutoCaptureSchema.parse(req.body);
     const updated = await accountService.updateAutoCapture(userId, autoCapture);
     res.status(200).json({ autoCapture: updated });
+  },
+
+  async updateSmartMemory(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { enabled } = updateSmartMemorySchema.parse(req.body);
+    const smartMemoryEnabled = await accountService.updateSmartMemory(userId, enabled);
+    res.status(200).json({ smartMemoryEnabled });
   },
 
   async listSessions(req: Request, res: Response) {

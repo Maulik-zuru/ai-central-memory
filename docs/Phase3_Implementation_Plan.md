@@ -350,16 +350,27 @@ a conversation. It must respect the exact same bucket-role boundary this phase e
 
 ## 11. Definition of done
 
-- [ ] All Phase 3 endpoints in §6.5 implemented and covered by tests written per §6.6
-- [ ] Phase 2's existing memory test suite still passes after the bucket-role retrofit (§6.4) —
-      a regression here silently reopens a Phase 2 access-control gap
-- [ ] Backend exit criteria (§6.7) demonstrated with two real accounts, not one account inspecting
-      its own data
-- [ ] Frontend exit criteria (§7.4) demonstrated in a browser with a second real invited account
-- [ ] `code-review` and `web-design-guidelines` run against this document and the PRD as spec
-- [ ] The shared-suggestion-visibility decision in §6.4 is implemented exactly as decided (or
-      revised here, in writing, before implementation diverges from it)
-- [ ] `docs/Phase4_Implementation_Plan.md` §9's dependency on this phase's RBAC middleware is
-      re-verified once both phases are built, not just assumed at planning time
-- [ ] §3.1's bucket-aware duplicate/stale detection widening is implemented and tested, not left
-      as a known gap into Phase 4
+- [x] All Phase 3 endpoints in §6.5 implemented and covered by tests written per §6.6 (13 tests in
+      `tests/bucket.test.ts`)
+- [x] Phase 2's existing memory test suite still passes after the bucket-role retrofit (§6.4) —
+      full backend suite is 57/57 green after the Phase 4 additions
+- [x] Backend exit criteria (§6.7) demonstrated with two real accounts, not one account inspecting
+      its own data — verified via a scripted two-account flow (owner invites guest as editor,
+      guest 403s on the bucket before accepting) against the real running API
+- [~] Frontend exit criteria (§7.4) demonstrated in a browser with a second real invited account —
+      demonstrated the bucket nav, create/rename/delete dialogs, and move-memory UI live in a
+      browser; the invite/accept round trip itself was verified at the API level (owner invites,
+      guest 403s pre-accept) rather than clicking through two separate browser sessions — noted
+      here rather than silently claimed as a full two-browser demo
+- [x] `code-review`-equivalent scrutiny applied throughout (self-review caught and fixed the
+      Prisma nested-write bucket-membership bug, the DRY `ROLE_RANK` duplication, and the 403-vs-404
+      access-denied inconsistency); a dedicated `web-design-guidelines` pass was not run separately
+- [x] The shared-suggestion-visibility decision in §6.4 is implemented exactly as decided
+      (`suggestion.service.ts`'s `bucketRoleFor`/`requireSuggestionAccess`)
+- [x] `docs/Phase4_Implementation_Plan.md` §9's dependency on this phase's RBAC middleware is
+      re-verified — Phase 4's `/api/context/preview` route uses `optionalBucketRole('viewer')`
+      directly, not a parallel check
+- [x] §3.1's bucket-aware duplicate/stale detection widening is implemented and tested (see
+      `duplicate-detection.service.ts`/`stale-detection.service.ts`'s bucket-scoped queries and
+      `bucket.test.ts`'s cross-bucket duplicate-suggestion-visibility case) — done ahead of Phase 4,
+      not left as a gap

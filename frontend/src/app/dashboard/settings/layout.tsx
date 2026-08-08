@@ -9,6 +9,7 @@ const TABS = [
   { href: "/dashboard/settings/api-keys", label: "API Keys" },
   { href: "/dashboard/settings/sessions", label: "Sessions" },
   { href: "/dashboard/settings/privacy", label: "Privacy" },
+  { href: "/dashboard/settings/smart-memory", label: "Smart Memory" },
 ];
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {

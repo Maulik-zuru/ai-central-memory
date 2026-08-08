@@ -1,13 +1,7 @@
-import { FolderOpen } from "lucide-react";
-import { EmptyState } from "@/components/dashboard/empty-state";
+import { redirect } from "next/navigation";
 
+// Buckets now live in the sidebar tree (Phase 3) rather than their own page — this route stays so
+// any old bookmark/link still lands somewhere sensible instead of 404ing.
 export default function BucketsPage() {
-  return (
-    <EmptyState
-      icon={FolderOpen}
-      title="Organize context into buckets"
-      description="Keep Personal, Work, and each client's context separate — and share a bucket with a teammate when you need to."
-      eta="Ships in Phase 3"
-    />
-  );
+  redirect("/dashboard/memories");
 }

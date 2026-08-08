@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Request, Response } from 'express';
 import { authenticate } from '../../shared/authenticate';
+import { apiRateLimit } from '../../shared/rateLimit';
 import { asyncHandler } from '../../shared/errorHandler';
 import { AppError } from '../../shared/errors';
 import { captureSchema } from './memory.types';
@@ -15,4 +16,5 @@ async function submit(req: Request, res: Response) {
 
 export const captureRouter = Router();
 captureRouter.use(authenticate);
+captureRouter.use(apiRateLimit);
 captureRouter.post('/', asyncHandler(submit));

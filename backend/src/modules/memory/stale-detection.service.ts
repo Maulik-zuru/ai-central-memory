@@ -12,6 +12,8 @@ interface NeighborRow {
   createdAt: Date;
 }
 
+// Phase 3 widening (docs/Phase3_Implementation_Plan.md §3.1): scoped by bucket, not creator — see
+// duplicate-detection.service.ts's comment for the full rationale.
 export const staleDetectionService = {
   async run(userId: string, memoryId: string): Promise<void> {
     const current = await prisma.memory.findUnique({ where: { id: memoryId } });
@@ -20,7 +22,7 @@ export const staleDetectionService = {
     const neighbors = await prisma.$queryRaw<NeighborRow[]>`
       SELECT id, "createdAt", (embedding <=> (SELECT embedding FROM "Memory" WHERE id = ${memoryId})) AS distance
       FROM "Memory"
-      WHERE "userId" = ${userId}
+      WHERE "bucketId" = ${current.bucketId}
         AND status = 'active'
         AND id != ${memoryId}
         AND embedding IS NOT NULL

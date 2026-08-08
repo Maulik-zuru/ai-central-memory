@@ -2,18 +2,17 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, MessageSquare, FileText, Sparkles, FolderOpen, Settings } from "lucide-react";
+import { Brain, MessageSquare, FileText, Sparkles, Settings } from "lucide-react";
 import { useSession } from "@/lib/use-session";
 import { NavItem } from "@/components/dashboard/nav-item";
 import { AccountMenu } from "@/components/dashboard/account-menu";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
+import { BucketNav } from "@/components/bucket/bucket-nav";
 
 const NAV_ITEMS = [
-  { href: "/dashboard/memories", icon: Brain, label: "Memories" },
   { href: "/dashboard/chat-history", icon: MessageSquare, label: "Chat History" },
   { href: "/dashboard/files", icon: FileText, label: "Files" },
   { href: "/dashboard/ask", icon: Sparkles, label: "Ask" },
-  { href: "/dashboard/buckets", icon: FolderOpen, label: "Buckets" },
   { href: "/dashboard/settings", icon: Settings, label: "Settings" },
 ];
 
@@ -42,7 +41,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
           <span className="font-display text-lg tracking-tight">MemoryOS</span>
         </div>
-        <nav className="flex flex-1 flex-col gap-0.5">
+        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
+          <NavItem href="/dashboard/memories" icon={Brain} label="Memories" />
+          <BucketNav />
+          <div className="my-2 h-px bg-border" />
           {NAV_ITEMS.map((item) => (
             <NavItem key={item.href} {...item} />
           ))}

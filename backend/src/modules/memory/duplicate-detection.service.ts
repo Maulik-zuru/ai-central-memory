@@ -13,12 +13,20 @@ interface NeighborRow {
   distance: number;
 }
 
+// Phase 3 widening (docs/Phase3_Implementation_Plan.md §3.1): candidates are scoped by bucket,
+// not by creator — two different collaborators contributing near-identical facts to the same
+// shared bucket must be flagged against each other, not just against their own other memories.
+// `userId` is still recorded on the suggestion (who/what triggered it), but membership — not this
+// field — governs who can see or act on it (suggestion.service.ts).
 export const duplicateDetectionService = {
   async run(userId: string, memoryId: string): Promise<void> {
+    const memory = await prisma.memory.findUnique({ where: { id: memoryId }, select: { bucketId: true } });
+    if (!memory) return;
+
     const neighbors = await prisma.$queryRaw<NeighborRow[]>`
       SELECT id, (embedding <=> (SELECT embedding FROM "Memory" WHERE id = ${memoryId})) AS distance
       FROM "Memory"
-      WHERE "userId" = ${userId}
+      WHERE "bucketId" = ${memory.bucketId}
         AND status = 'active'
         AND id != ${memoryId}
         AND embedding IS NOT NULL

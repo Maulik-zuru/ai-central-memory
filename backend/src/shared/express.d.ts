@@ -13,6 +13,7 @@ declare global {
         scopes?: string[];
       };
       log: Logger;
+      bucketRole?: 'viewer' | 'editor' | 'owner';
     }
   }
 }

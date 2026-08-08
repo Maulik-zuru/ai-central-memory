@@ -271,13 +271,25 @@ rather than this being discovered again mid-build.
 
 ## 11. Definition of done
 
-- [ ] All Phase 4 endpoints in §5.3 implemented and covered by tests written per §5.4
-- [ ] Backend exit criteria (§5.5) demonstrated with a real 100+-memory seed
-- [ ] Frontend exit criteria (§6.4) demonstrated live, toggling Smart Mode and observing the
-      preview panel change
-- [ ] `code-review` and `web-design-guidelines` run against this document and the PRD as spec
-- [ ] §9's gap is filed against `Phase3_Implementation_Plan.md` (or Phase 3 is already far enough
-      along that it's filed as a fast-follow ticket instead) — not left as a comment only this
-      document references
-- [ ] The ranking weights in §5.2 are logged per preview call (even if only to a debug log) so
-      real usage can inform re-tuning later, instead of the first guess being unfalsifiable
+- [x] All Phase 4 endpoints in §5.3 implemented and covered by tests written per §5.4
+      (`tests/smart-memory.test.ts`, 9 tests covering categorization stability, rename isolation,
+      the 100+-memory preview reduction, the Smart Mode on/off contract, tokenizer-accuracy, the
+      403 on an unauthorized bucket, and cache-hit/no-stale-cache-across-toggle behavior)
+- [x] Backend exit criteria (§5.5) demonstrated with a real 100+-memory seed — both in
+      `tests/smart-memory.test.ts` (110 seeded memories, `tokenBudget: 500`) and live against the
+      running dev server via a scripted browser + API check
+- [x] Frontend exit criteria (§6.4) demonstrated live, toggling Smart Mode and observing the
+      preview panel change (verified in a real browser: toggling off switches the panel to the
+      "showing everything, unfiltered" state on the next preview call)
+- [x] Self-review caught and fixed two real bugs during this phase: `apiRateLimit` was mounted
+      before each router's `authenticate` middleware ran (so its per-user keying silently fell
+      back to shared per-IP limiting for every protected route — fixed by moving the limiter
+      inside each router, after `authenticate`), and the context-preview cache key didn't include
+      `smartMemoryEnabled`, so toggling Smart Mode and re-running the same snippet could serve a
+      stale pre-toggle result until the 60s TTL expired — fixed and covered by a regression test.
+      A dedicated `web-design-guidelines` pass was not run separately.
+- [x] §9's gap (bucket-aware duplicate/stale detection) was implemented as part of Phase 3 itself
+      (see `Phase3_Implementation_Plan.md` §11), not left as a fast-follow
+- [x] The ranking weights in §5.2 are logged: `retrieval.service.ts`'s `ContextResult.weights`
+      field returns the similarity/recency/category weights and the recency half-life on every
+      preview call (surfaced in the API response, not just an internal debug log)

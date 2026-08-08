@@ -8,7 +8,6 @@ import { env } from './shared/env';
 import { errorHandler, notFoundHandler } from './shared/errorHandler';
 import { logger } from './shared/logger';
 import { prisma } from './shared/prisma';
-import { apiRateLimit } from './shared/rateLimit';
 import { UPLOAD_DIR } from './shared/providers/storage.provider';
 import { authRouter } from './modules/auth/auth.routes';
 import { apiKeyRouter } from './modules/apikey/apikey.routes';
@@ -16,6 +15,10 @@ import { accountRouter } from './modules/account/account.routes';
 import { memoryRouter } from './modules/memory/memory.routes';
 import { suggestionRouter } from './modules/suggestion/suggestion.routes';
 import { captureRouter } from './modules/memory/capture.routes';
+import { bucketRouter } from './modules/bucket/bucket.routes';
+import { inviteRouter } from './modules/membership/invite.routes';
+import { contextRouter } from './modules/context/context.routes';
+import { categoryRouter } from './modules/category/category.routes';
 
 export function createApp() {
   const app = express();
@@ -53,12 +56,20 @@ export function createApp() {
   // Local-disk image memories (StorageProvider — see docs/Phase2_Implementation_Plan.md §3).
   app.use('/uploads', express.static(UPLOAD_DIR));
 
+  // apiRateLimit is applied inside each router, after that router's own `authenticate` — not
+  // here — so its per-identity keyGenerator (shared/rateLimit.ts) actually sees req.auth.userId
+  // instead of always falling back to shared per-IP limiting (a bug this phase found: mounting
+  // it here ran the limiter before authentication ever set req.auth).
   app.use('/api/auth', authRouter);
-  app.use('/api/keys', apiRateLimit, apiKeyRouter);
-  app.use('/api/account', apiRateLimit, accountRouter);
-  app.use('/api/memories', apiRateLimit, memoryRouter);
-  app.use('/api/suggestions', apiRateLimit, suggestionRouter);
-  app.use('/api/capture', apiRateLimit, captureRouter);
+  app.use('/api/keys', apiKeyRouter);
+  app.use('/api/account', accountRouter);
+  app.use('/api/memories', memoryRouter);
+  app.use('/api/suggestions', suggestionRouter);
+  app.use('/api/capture', captureRouter);
+  app.use('/api/buckets', bucketRouter);
+  app.use('/api/invites', inviteRouter);
+  app.use('/api/context', contextRouter);
+  app.use('/api/categories', categoryRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

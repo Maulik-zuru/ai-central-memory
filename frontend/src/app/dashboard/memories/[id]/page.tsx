@@ -19,6 +19,15 @@ export default function MemoryDetailPage() {
 
   const memoryQuery = useQuery({ queryKey: ["memory", id], queryFn: () => api.memory(id) });
   const versionsQuery = useQuery({ queryKey: ["memory-versions", id], queryFn: () => api.memoryVersions(id) });
+  const bucketsQuery = useQuery({ queryKey: ["buckets"], queryFn: api.buckets });
+
+  const move = useMutation({
+    mutationFn: (bucketId: string) => api.moveMemory(id, bucketId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["memory", id] });
+      queryClient.invalidateQueries({ queryKey: ["memories"] });
+    },
+  });
 
   const update = useMutation({
     mutationFn: (content: string) => api.updateMemory(id, content),
@@ -56,9 +65,27 @@ export default function MemoryDetailPage() {
             <CardTitle className="text-base">Memory</CardTitle>
             <SourceBadge source={memory.source} />
           </div>
-          <Button size="icon" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => remove.mutate()}>
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-2">
+            {bucketsQuery.data && (
+              <select
+                value={memory.bucketId}
+                disabled={move.isPending}
+                onChange={(e) => move.mutate(e.target.value)}
+                className="h-8 rounded-md border border-input bg-card px-2 text-xs text-muted-foreground"
+              >
+                {bucketsQuery.data.buckets
+                  .filter((b) => b.role !== "viewer")
+                  .map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+              </select>
+            )}
+            <Button size="icon" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => remove.mutate()}>
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {imageSrc && (
