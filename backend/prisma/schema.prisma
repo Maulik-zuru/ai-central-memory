@@ -1,0 +1,77 @@
+// AI Memory & Context Platform — Phase 1 schema (Accounts, Auth & API Foundations)
+// See docs/Phase1_Implementation_Plan.md §4.1 for the design rationale.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String?
+  oauthGoogleId String?  @unique
+  planId        String   @default("core")
+  autoCapture   Json     @default("{}") // per-platform auto-capture consent toggles (US-ACC-07)
+  createdAt     DateTime @default(now())
+
+  apiKeys       ApiKey[]
+  subscription  Subscription?
+  auditLogs     AuditLog[]
+  sessions      Session[]
+}
+
+model Session {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken String    @unique
+  userAgent    String?
+  ipAddress    String?
+  lastActiveAt DateTime  @default(now())
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  keyHash    String    @unique
+  keyPreview String
+  scopes     String[]  @default([])
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model Subscription {
+  id          String    @id @default(cuid())
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan        String    @default("core") // "core" | "pro" — enforcement lands in Phase 10
+  status      String    @default("trialing")
+  trialEndsAt DateTime?
+  stripeIds   Json?
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action     String
+  targetType String?
+  targetId   String?
+  occurredAt DateTime @default(now())
+
+  @@index([userId])
+}

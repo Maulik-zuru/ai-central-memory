@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+:root {
+  --radius: 0.625rem;
+
+  --background: #faf9f5;
+  --foreground: #1c1b19;
+
+  --card: #ffffff;
+  --card-foreground: #1c1b19;
+
+  --primary: #d9480f;
+  --primary-foreground: #fff8f2;
+
+  --secondary: #f0eee7;
+  --secondary-foreground: #1c1b19;
+
+  --muted: #f0eee7;
+  --muted-foreground: #6b6960;
+
+  --accent: #f0eee7;
+  --accent-foreground: #1c1b19;
+
+  --destructive: #c1291b;
+  --destructive-foreground: #fff8f2;
+
+  --success: #2f6d3c;
+  --border: #e4e1d8;
+  --input: #e4e1d8;
+  --ring: #d9480f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #121110;
+    --foreground: #f5f3ee;
+
+    --card: #181715;
+    --card-foreground: #f5f3ee;
+
+    --primary: #ff8a3d;
+    --primary-foreground: #1c1000;
+
+    --secondary: #201f1c;
+    --secondary-foreground: #f5f3ee;
+
+    --muted: #201f1c;
+    --muted-foreground: #a29e93;
+
+    --accent: #201f1c;
+    --accent-foreground: #f5f3ee;
+
+    --destructive: #ff6b57;
+    --destructive-foreground: #2a0900;
+
+    --success: #6cbf7c;
+    --border: #34322d;
+    --input: #34322d;
+    --ring: #ff8a3d;
+  }
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+body {
+  font-feature-settings: "cv11", "ss01";
+}
+
+/* Memory-style accent used for timestamps, ids, api keys — the one deliberately technical
+   typographic choice that keeps the "notebook" feel distinct from a generic SaaS dashboard. */
+.mono-tag {
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+}
