@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, MessageSquare, FileText, Sparkles, Settings } from "lucide-react";
+import { Brain, MessageSquare, FileText, Sparkles, Settings, Network } from "lucide-react";
 import { useSession } from "@/lib/use-session";
 import { NavItem } from "@/components/dashboard/nav-item";
 import { AccountMenu } from "@/components/dashboard/account-menu";
@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/chat-history", icon: MessageSquare, label: "Chat History" },
   { href: "/dashboard/files", icon: FileText, label: "Files" },
   { href: "/dashboard/ask", icon: Sparkles, label: "Ask" },
+  { href: "/dashboard/intelligence", icon: Network, label: "Intelligence" },
   { href: "/dashboard/settings", icon: Settings, label: "Settings" },
 ];
 

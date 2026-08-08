@@ -3,6 +3,9 @@ import { env } from './shared/env';
 import { logger } from './shared/logger';
 import { prisma } from './shared/prisma';
 import { insightService } from './modules/chat-history/insight.service';
+import { graphService } from './modules/intelligence/graph.service';
+import { analyticsService } from './modules/intelligence/analytics.service';
+import { trialExpiryService } from './modules/billing/trial-expiry.service';
 
 const app = createApp();
 
@@ -14,6 +17,14 @@ const server = app.listen(env.port, () => {
 // per-request. See job-runner.provider.ts for why this is an in-process interval rather than
 // real cron infra this phase.
 insightService.registerScheduledJob();
+
+// Phase 9's knowledge-graph extraction and usage-analytics rollup — same JobRunner seam, not a
+// second scheduler (docs/Phase9_Implementation_Plan.md §4).
+graphService.registerScheduledJob();
+analyticsService.registerScheduledJob();
+
+// Phase 10's trial-expiry job — same JobRunner seam (docs/Phase10_Implementation_Plan.md §4).
+trialExpiryService.registerScheduledJob();
 
 // Without this, a deploy/restart kills in-flight requests and leaves Postgres connections open
 // until they time out — SIGTERM is what container orchestrators (Docker, Kubernetes, etc.) send

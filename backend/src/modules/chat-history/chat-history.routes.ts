@@ -4,6 +4,7 @@ import { authenticate } from '../../shared/authenticate';
 import { apiRateLimit } from '../../shared/rateLimit';
 import { asyncHandler } from '../../shared/errorHandler';
 import { optionalBucketRole } from '../../shared/bucketAccess';
+import { requirePlan } from '../../shared/requirePlan';
 import { chatHistoryController } from './chat-history.controller';
 
 const upload = multer({
@@ -21,4 +22,5 @@ chatHistoryRouter.get('/conversations', optionalBucketRole('viewer'), asyncHandl
 chatHistoryRouter.get('/conversations/:id', asyncHandler(chatHistoryController.transcript));
 chatHistoryRouter.post('/search', optionalBucketRole('viewer'), asyncHandler(chatHistoryController.search));
 chatHistoryRouter.get('/usage', asyncHandler(chatHistoryController.usage));
-chatHistoryRouter.get('/insights', asyncHandler(chatHistoryController.insights));
+// Retrofit (docs/Phase10_Implementation_Plan.md §3): monthly insights are Pro-only.
+chatHistoryRouter.get('/insights', requirePlan('pro'), asyncHandler(chatHistoryController.insights));

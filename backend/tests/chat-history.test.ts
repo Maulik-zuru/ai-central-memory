@@ -301,6 +301,9 @@ describe('Chat History Archive — limits and insights (US-ARC-06, US-ARC-08)', 
 
   it('produces a null summary (not a fabricated digest) for a month with no qualifying conversations', async () => {
     const { userId } = await seedAccount('insights-a@example.com');
+    // Monthly insights are Pro-only (Phase 10 retrofit) — generateForUser silently no-ops for
+    // Core, so this test (about the "genuinely nothing happened" floor, not plan gating) upgrades first.
+    await prisma.subscription.update({ where: { userId }, data: { plan: 'pro' } });
     await insightService.generateForUser(userId, '2020-01');
     const insight = await prisma.monthlyInsight.findUnique({ where: { userId_month: { userId, month: '2020-01' } } });
     expect(insight?.summary).toBeNull();

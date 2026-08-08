@@ -37,6 +37,11 @@ model User {
   files         File[]
   askConversations AskConversation[]
   extensionPairingCodes ExtensionPairingCode[]
+  knowledgeGraphNodes KnowledgeGraphNode[]
+  knowledgeGraphEdges KnowledgeGraphEdge[]
+  usageAnalyticsEvents UsageAnalyticsEvent[]
+  usageAnalyticsSummaries UsageAnalyticsSummary[]
+  payments Payment[]
 }
 
 model Session {
@@ -166,6 +171,9 @@ model Memory {
   createdAt  DateTime                     @default(now())
   updatedAt  DateTime                     @updatedAt
   versions   MemoryVersion[]
+  // Phase 9: knowledge graph extraction marker — same lifecycle shape as embedding/categoryId.
+  graphProcessedAt DateTime?
+  graphEdges KnowledgeGraphEdge[]
 
   @@index([userId, status])
   @@index([bucketId])
@@ -253,6 +261,9 @@ model Message {
   position       Int
   createdAt      DateTime
   chunks         MessageChunk[]
+  // Phase 9: knowledge graph extraction marker — mirrors Memory.graphProcessedAt.
+  graphProcessedAt DateTime?
+  graphEdges KnowledgeGraphEdge[]
 
   @@unique([conversationId, position])
   @@index([conversationId])
@@ -369,4 +380,92 @@ model ExtensionPairingCode {
   createdAt    DateTime  @default(now())
 
   @@index([code])
+}
+
+// --- Phase 9: Advanced Intelligence (Pro tier) ----------------------------------------------
+// See docs/Phase9_Implementation_Plan.md §5.1. Entity resolution is exact-match on
+// (userId, normalizedName, type) — deliberately simpler than Category's embedding-centroid
+// approach, since entity names are short, low-cardinality-per-user strings.
+model KnowledgeGraphNode {
+  id             String               @id @default(cuid())
+  userId         String
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name           String
+  normalizedName String
+  type           String // "person" | "project" | "client" | "technology" | "topic" | ...
+  createdAt      DateTime             @default(now())
+  edgesFrom      KnowledgeGraphEdge[] @relation("EdgeFrom")
+  edgesTo        KnowledgeGraphEdge[] @relation("EdgeTo")
+
+  @@unique([userId, normalizedName, type])
+  @@index([userId])
+}
+
+model KnowledgeGraphEdge {
+  id         String             @id @default(cuid())
+  userId     String
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fromNodeId String
+  fromNode   KnowledgeGraphNode @relation("EdgeFrom", fields: [fromNodeId], references: [id], onDelete: Cascade)
+  toNodeId   String
+  toNode     KnowledgeGraphNode @relation("EdgeTo", fields: [toNodeId], references: [id], onDelete: Cascade)
+  label      String
+  // Attribution (US-ADV-02 AC: every edge traceable to a source) — exactly one of these is set.
+  sourceMemoryId  String?
+  sourceMemory    Memory?  @relation(fields: [sourceMemoryId], references: [id], onDelete: SetNull)
+  sourceMessageId String?
+  sourceMessage   Message? @relation(fields: [sourceMessageId], references: [id], onDelete: SetNull)
+  createdAt  DateTime           @default(now())
+
+  @@index([userId])
+  @@index([fromNodeId])
+  @@index([toNodeId])
+}
+
+model UsageAnalyticsEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String // "memory_created" | "ask_query" | "sync_completed" | "context_preview"
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId, type, createdAt])
+}
+
+model UsageAnalyticsSummary {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  period          String // "2026-07"
+  memoriesCreated Int      @default(0)
+  askQueries      Int      @default(0)
+  syncsCompleted  Int      @default(0)
+  tokensSaved     Int      @default(0)
+  computedAt      DateTime @default(now())
+
+  @@unique([userId, period])
+}
+
+// --- Phase 10: Billing, Plans & Monetization -------------------------------------------------
+// See docs/Phase10_Implementation_Plan.md §5.1. Subscription itself needs no new columns —
+// plan/status/trialEndsAt/stripeIds (Phase 1) already cover this phase's needs.
+model Payment {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stripePaymentId     String   @unique
+  amountCents         Int
+  currency            String   @default("usd")
+  status              String // "succeeded" | "failed" | "refunded"
+  paidAt              DateTime
+  refundEligibleUntil DateTime
+
+  @@index([userId])
+}
+
+model ProcessedWebhookEvent {
+  id            String   @id @default(cuid())
+  stripeEventId String   @unique
+  processedAt   DateTime @default(now())
 }

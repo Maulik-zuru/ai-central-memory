@@ -226,6 +226,43 @@ export interface AskResult {
   message: { id: string; content: string; citations: AskCitation[] };
 }
 
+export interface GraphNode {
+  id: string;
+  name: string;
+  type: string;
+}
+
+export interface GraphEdge {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  label: string;
+  sourceMemoryId: string | null;
+  sourceMessageId: string | null;
+}
+
+export interface KnowledgeGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface BillingSummary {
+  plan: "core" | "pro";
+  status: string;
+  trialEndsAt: string | null;
+  history: HistoryUsage;
+  usage: UsageSummary | null;
+}
+
+export interface UsageSummary {
+  period: string;
+  memoriesCreated: number;
+  askQueries: number;
+  syncsCompleted: number;
+  tokensSaved: number;
+  computedAt: string | null;
+}
+
 export const api = {
   register: (email: string, password: string) =>
     apiRequest("/api/auth/register", { method: "POST", body: JSON.stringify({ email, password }) }),
@@ -409,6 +446,27 @@ export const api = {
 
   claimExtensionPairing: (code: string): Promise<{ apiKeyId: string }> =>
     apiRequest("/api/extension/pairing/claim", { method: "POST", body: JSON.stringify({ code }) }),
+
+  knowledgeGraph: (params: { bucketId?: string } = {}): Promise<KnowledgeGraph> => {
+    const search = new URLSearchParams();
+    if (params.bucketId) search.set("bucketId", params.bucketId);
+    const qs = search.toString();
+    return apiRequest(`/api/intelligence/graph${qs ? `?${qs}` : ""}`);
+  },
+
+  usageSummary: (period?: string): Promise<{ usage: UsageSummary }> =>
+    apiRequest(`/api/intelligence/usage${period ? `?period=${period}` : ""}`),
+
+  intelligenceInsight: (month?: string): Promise<{ insight: MonthlyInsight }> =>
+    apiRequest(`/api/intelligence/insights${month ? `?month=${month}` : ""}`),
+
+  billingSummary: (): Promise<BillingSummary> => apiRequest("/api/billing/summary"),
+
+  createCheckoutSession: (plan: "pro"): Promise<{ url: string }> =>
+    apiRequest("/api/billing/checkout", { method: "POST", body: JSON.stringify({ plan }) }),
+
+  createBillingPortalSession: (): Promise<{ url: string }> =>
+    apiRequest("/api/billing/portal", { method: "POST" }),
 };
 
 export function memoryImageSrc(memory: Memory): string | null {

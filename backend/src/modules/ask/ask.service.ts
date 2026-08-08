@@ -6,6 +6,7 @@ import { tokenCount } from '../../shared/tokenizer';
 import { retrievalService } from '../context/retrieval.service';
 import { chatSearchService } from '../chat-history/chat-search.service';
 import { fileSearchService } from '../file/file-search.service';
+import { analyticsService } from '../intelligence/analytics.service';
 
 export type AskMode = 'memories' | 'chat_history' | 'files' | 'all';
 export type SourceType = 'memory' | 'message' | 'file';
@@ -184,6 +185,7 @@ export const askService = {
     });
 
     await prisma.askConversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } });
+    analyticsService.record(userId, 'ask_query');
 
     return {
       conversationId: conversation.id,

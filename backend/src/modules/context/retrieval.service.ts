@@ -6,6 +6,7 @@ import { getCacheProvider } from '../../shared/providers/cache.provider';
 import { toVectorLiteral } from '../../shared/vector';
 import { tokenCount } from '../../shared/tokenizer';
 import { accessibleBucketIds } from '../../shared/bucketAccess';
+import { analyticsService } from '../intelligence/analytics.service';
 
 export const DEFAULT_TOKEN_BUDGET = 2000;
 const CACHE_TTL_MS = 60_000;
@@ -167,6 +168,7 @@ export const retrievalService = {
     }
 
     cache.set(key, result, CACHE_TTL_MS);
+    analyticsService.record(userId, 'context_preview', { tokensSaved: result.everythingTokens - result.actualTokens });
     return result;
   },
 };

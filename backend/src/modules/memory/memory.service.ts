@@ -5,6 +5,7 @@ import { embeddingService } from './embedding.service';
 import { getStorageProvider } from '../../shared/providers/storage.provider';
 import { bucketService } from '../bucket/bucket.service';
 import { ROLE_RANK, accessibleBucketIds, type BucketRole } from '../../shared/bucketAccess';
+import { analyticsService } from '../intelligence/analytics.service';
 
 type MemoryRecord = Awaited<ReturnType<typeof prisma.memory.findFirstOrThrow>>;
 
@@ -61,6 +62,7 @@ export const memoryService = {
     // embedding.service.ts for why this is a plain async call and not a real queue yet.
     void embeddingService.process(memory.id, userId, content);
     await auditService.record(userId, 'memory.create', { type: 'Memory', id: memory.id });
+    analyticsService.record(userId, 'memory_created');
     return toPublic(memory);
   },
 
@@ -90,6 +92,7 @@ export const memoryService = {
 
     void embeddingService.process(memory.id, userId, content);
     await auditService.record(userId, 'memory.create', { type: 'Memory', id: memory.id });
+    analyticsService.record(userId, 'memory_created');
     return toPublic(memory);
   },
 

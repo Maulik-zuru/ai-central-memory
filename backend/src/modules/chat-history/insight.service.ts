@@ -1,6 +1,7 @@
 import { prisma } from '../../shared/prisma';
 import { getLlmProvider } from '../../shared/providers/llm.provider';
 import { getJobRunner } from '../../shared/providers/job-runner.provider';
+import { hasPlan } from '../../shared/requirePlan';
 
 // US-ARC-06: a periodic digest, not on-demand only. A user with too little activity in the month
 // gets an honest `summary: null` row rather than a fabricated digest (the AC this floor exists
@@ -22,6 +23,10 @@ function monthRange(month: string): { start: Date; end: Date } {
 
 export const insightService = {
   async generateForUser(userId: string, month: string): Promise<void> {
+    // Retrofit (docs/Phase10_Implementation_Plan.md §3): Pro-only. Skipped, not errored — this
+    // runs for every user in runForAllUsers()'s daily sweep regardless of plan.
+    if (!(await hasPlan(userId, 'pro'))) return;
+
     const { start, end } = monthRange(month);
     const conversations = await prisma.conversation.findMany({
       where: { userId, importedAt: { gte: start, lt: end } },

@@ -23,6 +23,8 @@ import { chatHistoryRouter } from './modules/chat-history/chat-history.routes';
 import { fileRouter } from './modules/file/file.routes';
 import { askRouter } from './modules/ask/ask.routes';
 import { extensionRouter } from './modules/extension/extension.routes';
+import { intelligenceRouter } from './modules/intelligence/intelligence.routes';
+import { billingRouter } from './modules/billing/billing.routes';
 
 export function createApp() {
   const app = express();
@@ -78,6 +80,8 @@ export function createApp() {
   app.use('/api/files', fileRouter);
   app.use('/api/ask', askRouter);
   app.use('/api/extension', extensionRouter);
+  app.use('/api/intelligence', intelligenceRouter);
+  app.use('/api/billing', billingRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

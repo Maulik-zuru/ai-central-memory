@@ -11,6 +11,10 @@ export async function registerAndGetToken(app: Express, email: string): Promise<
 
 export async function resetDb() {
   // Order matters: children before parents.
+  // ProcessedWebhookEvent has no userId (a Stripe event isn't scoped to one account) so it never
+  // cascades from a user delete below — cleared explicitly, the same reason it's here and not in
+  // the per-model deletes further down.
+  await prisma.processedWebhookEvent.deleteMany();
   await prisma.memorySuggestion.deleteMany();
   await prisma.memoryVersion.deleteMany();
   await prisma.memory.deleteMany();

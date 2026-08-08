@@ -4,8 +4,14 @@ import { AppError } from '../../shared/errors';
 import { auditService } from '../audit/audit.service';
 import { sha256Hex } from '../../shared/tokens';
 import { getEmailProvider } from '../../shared/providers/email.provider';
+import { hasPlan } from '../../shared/requirePlan';
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Retrofit (docs/Phase10_Implementation_Plan.md §3): shared buckets are Must/Pro, but a cap — not
+// zero — for Core, matching "works for any plan today" being narrowed rather than removed
+// outright. Counts existing members, not pending invites, so re-inviting an already-counted
+// collaborator never double-charges the cap.
+const FREE_COLLABORATOR_CAP = 3;
 
 function generateInviteToken(): string {
   return crypto.randomBytes(32).toString('hex');
@@ -18,6 +24,17 @@ async function countOwners(bucketId: string): Promise<number> {
 export const membershipService = {
   async invite(bucketId: string, invitedByUserId: string, email: string, role: 'editor' | 'viewer') {
     const bucket = await prisma.bucket.findUniqueOrThrow({ where: { id: bucketId } });
+
+    if (!(await hasPlan(invitedByUserId, 'pro'))) {
+      const memberCount = await prisma.bucketMember.count({ where: { bucketId } });
+      if (memberCount >= FREE_COLLABORATOR_CAP) {
+        throw AppError.forbidden(
+          `Free buckets are capped at ${FREE_COLLABORATOR_CAP} collaborators. Upgrade to Pro for unlimited collaborators.`,
+          'PRO_FEATURE',
+        );
+      }
+    }
+
     const rawToken = generateInviteToken();
 
     const invite = await prisma.bucketInvite.create({

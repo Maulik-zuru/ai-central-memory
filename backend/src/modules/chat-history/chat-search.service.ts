@@ -5,9 +5,19 @@ import { getLlmProvider } from '../../shared/providers/llm.provider';
 import { getCacheProvider } from '../../shared/providers/cache.provider';
 import { toVectorLiteral } from '../../shared/vector';
 import { accessibleBucketIds, requireBucketMembership } from '../../shared/bucketAccess';
+import { hasPlan } from '../../shared/requirePlan';
+import { AppError } from '../../shared/errors';
+import { auditService } from '../audit/audit.service';
 
 const CACHE_TTL_MS = 60_000;
 const CANDIDATE_LIMIT = 20;
+
+// Retrofit (docs/Phase10_Implementation_Plan.md §3): precise (rerank) search is a Pro feature;
+// Core gets a capped number of uses as a preview, per the PRD's own "preview may be available on
+// Core" tier note — not an outright block. Counted via AuditLog (the existing action-count
+// mechanism), not a new counter table, since this is the only place that needs the count.
+const CORE_PRECISE_SEARCH_PREVIEW_LIMIT = 5;
+const PRECISE_SEARCH_ACTION = 'chat_search.precise';
 
 interface CandidateRow {
   conversationId: string;
@@ -69,6 +79,16 @@ export const chatSearchService = {
     userId: string,
     params: { query: string; bucketId?: string; mode: 'semantic' | 'precise' },
   ): Promise<ChatSearchResult[]> {
+    if (params.mode === 'precise' && !(await hasPlan(userId, 'pro'))) {
+      const previousUses = await prisma.auditLog.count({ where: { userId, action: PRECISE_SEARCH_ACTION } });
+      if (previousUses >= CORE_PRECISE_SEARCH_PREVIEW_LIMIT) {
+        throw AppError.forbidden(
+          `You've used your ${CORE_PRECISE_SEARCH_PREVIEW_LIMIT} free precise searches. Upgrade to Pro for unlimited precise search.`,
+          'PRO_FEATURE',
+        );
+      }
+    }
+
     const bucketIds = params.bucketId
       ? [(await requireBucketMembership(userId, params.bucketId, 'viewer')).bucketId]
       : await accessibleBucketIds(userId);
@@ -118,6 +138,9 @@ export const chatSearchService = {
     }));
 
     cache.set(key, results, CACHE_TTL_MS);
+    if (params.mode === 'precise' && !(await hasPlan(userId, 'pro'))) {
+      await auditService.record(userId, PRECISE_SEARCH_ACTION);
+    }
     return results;
   },
 };

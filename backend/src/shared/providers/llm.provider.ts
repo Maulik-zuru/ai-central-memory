@@ -21,6 +21,13 @@ export interface LlmProvider {
     question: string,
     chunks: { id: string; content: string }[],
   ): Promise<{ answer: string; usedChunkIds: string[] }>;
+  /** Extract named entities and the relations between them mentioned together in one text (Phase 9 US-ADV-02). */
+  extractEntities(text: string): Promise<EntityExtractionResult>;
+}
+
+export interface EntityExtractionResult {
+  entities: { name: string; type: string }[];
+  relations: { from: string; to: string; label: string }[];
 }
 
 const STOPWORDS = new Set([
@@ -81,6 +88,32 @@ function stubAnswerWithContext(
   };
 }
 
+// Stub extraction: a real implementation calls an LLM for genuine NLP entity/relation extraction.
+// This deterministic version treats capitalized word runs ("Client A", "Project X") as candidate
+// proper-noun entities and every pair mentioned in the same text as related — enough to exercise
+// "a node gets created per entity, an edge per co-mention, every edge attributed to its source"
+// end to end without a network call. Not shippable as real NLP — same bar stubSuggestCategoryLabel
+// sets (see docs/Phase9_Implementation_Plan.md §4).
+const CAPITALIZED_RUN = /\b[A-Z][a-zA-Z0-9]*(?:\s[A-Z][a-zA-Z0-9]*)*\b/g;
+
+function stubExtractEntities(text: string): EntityExtractionResult {
+  const matches = text.match(CAPITALIZED_RUN) ?? [];
+  const seen = new Map<string, string>();
+  for (const match of matches) {
+    const normalized = match.toLowerCase().trim();
+    if (normalized.length < 2 || seen.has(normalized)) continue;
+    seen.set(normalized, match.trim());
+  }
+  const entities = [...seen.values()].map((name) => ({ name, type: 'topic' }));
+  const relations: { from: string; to: string; label: string }[] = [];
+  for (let i = 0; i < entities.length; i++) {
+    for (let j = i + 1; j < entities.length; j++) {
+      relations.push({ from: entities[i].name, to: entities[j].name, label: 'mentioned with' });
+    }
+  }
+  return { entities, relations };
+}
+
 const EMBEDDING_DIM = 1536;
 
 /**
@@ -135,6 +168,9 @@ export const stubLlmProvider: LlmProvider = {
   },
   async answerWithContext(_question, chunks) {
     return stubAnswerWithContext(chunks);
+  },
+  async extractEntities(text: string) {
+    return stubExtractEntities(text);
   },
 };
 
@@ -259,6 +295,28 @@ class AnthropicLlmProvider implements LlmProvider {
     return { answer, usedChunkIds };
   }
 
+  async extractEntities(text: string): Promise<EntityExtractionResult> {
+    const res = await this.complete(
+      'Extract named entities (people, projects, clients, technologies, topics) mentioned in the ' +
+        'text and the relations between entities mentioned together. Reply with ONLY strict JSON ' +
+        'of the shape {"entities":[{"name":"...","type":"..."}],"relations":[{"from":"...","to":"...","label":"..."}]}. ' +
+        'No commentary, no markdown fences.',
+      text,
+      512,
+    );
+    if (!res) return stubExtractEntities(text);
+    try {
+      const parsed = JSON.parse(res) as EntityExtractionResult;
+      if (!Array.isArray(parsed.entities) || !Array.isArray(parsed.relations)) {
+        return stubExtractEntities(text);
+      }
+      return parsed;
+    } catch {
+      logger.error('Anthropic entity-extraction reply was not valid JSON; falling back to stub');
+      return stubExtractEntities(text);
+    }
+  }
+
   private async complete(system: string, userText: string, maxTokens: number): Promise<string | null> {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -327,6 +385,7 @@ export function getLlmProvider(): LlmProvider {
     summarize: (text) => extraction.summarize(text),
     rerank: (query, candidates) => extraction.rerank(query, candidates),
     answerWithContext: (question, chunks) => extraction.answerWithContext(question, chunks),
+    extractEntities: (text) => extraction.extractEntities(text),
   };
   return cached;
 }

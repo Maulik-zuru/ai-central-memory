@@ -3,6 +3,7 @@ import { logger } from '../../shared/logger';
 import { getLlmProvider } from '../../shared/providers/llm.provider';
 import { toVectorLiteral } from '../../shared/vector';
 import { summaryService } from './summary.service';
+import { analyticsService } from '../intelligence/analytics.service';
 
 const MAX_CHUNK_CHARS = 1000;
 
@@ -64,6 +65,7 @@ export const syncService = {
         where: { id: conversationId },
         data: { status: 'ready', errorReason: null, lastSyncedAt: new Date() },
       });
+      analyticsService.record(conversation.userId, 'sync_completed');
 
       await summaryService.summarize(conversationId).catch((err) => {
         logger.error({ err, conversationId }, 'Post-sync summarization failed (non-fatal)');

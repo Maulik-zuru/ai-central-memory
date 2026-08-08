@@ -78,6 +78,18 @@ describe('Smart Memory — categorization (US-ADV-01)', () => {
       SELECT centroid::text FROM "Category" WHERE id = ${memory.categoryId}
     `;
 
+    // Category rename is Pro-only (Phase 10 retrofit) — a Core-plan attempt is blocked before it
+    // ever reaches category.service, which is exactly what this test's own assertions below prove
+    // didn't happen (no state mutated by a request that was never allowed to run).
+    const blocked = await request(app)
+      .patch(`/api/categories/${memory.categoryId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ label: 'Deployment Preferences' });
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.error.code).toBe('PRO_FEATURE');
+
+    await prisma.subscription.update({ where: { userId }, data: { plan: 'pro' } });
+
     const rename = await request(app)
       .patch(`/api/categories/${memory.categoryId}`)
       .set('Authorization', `Bearer ${token}`)

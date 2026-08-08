@@ -1,10 +1,20 @@
 import { prisma } from '../../shared/prisma';
 import { getLlmProvider } from '../../shared/providers/llm.provider';
+import { hasPlan } from '../../shared/requirePlan';
 
 // US-ARC-05: async, post-sync — never blocks the import itself, same "appended step in the
 // fire-and-forget chain" shape as Phase 4's categorization appended to Phase 2's embedding chain.
 export const summaryService = {
   async summarize(conversationId: string): Promise<void> {
+    const conversation = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { userId: true },
+    });
+    // Retrofit (docs/Phase10_Implementation_Plan.md §3): Pro-only. A silent skip for Core, not a
+    // thrown error — sync.service.ts's caller logs any rejection here as a failure, and "the user
+    // isn't on the right plan" isn't one.
+    if (!conversation || !(await hasPlan(conversation.userId, 'pro'))) return;
+
     const messages = await prisma.message.findMany({
       where: { conversationId },
       orderBy: { position: 'asc' },
