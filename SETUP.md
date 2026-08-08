@@ -33,8 +33,11 @@ partial failure just picks up where it left off.
 1. **Installs Node.js 20+** if missing (Homebrew on macOS, apt/dnf/pacman on Linux, winget on
    Windows).
 2. **Installs PostgreSQL 16** if missing (same package managers).
-3. **Starts the PostgreSQL service** if it isn't running.
-4. Hands off to `scripts/setup.mjs`, which:
+3. **Installs the pgvector extension** (Phase 2's memory similarity search needs it) — via the
+   same package managers on macOS/Linux; on Windows this is a checked prerequisite with manual
+   install steps printed, since there's no winget package for it (see Platform notes).
+4. **Starts the PostgreSQL service** if it isn't running.
+5. Hands off to `scripts/setup.mjs`, which:
    - Creates the `ai_memory_dev` and `ai_memory_test` databases (skips ones that already exist)
    - Writes `backend/.env` and `frontend/.env.local` from their `.env.example` templates —
      **only if they don't already exist**, so it never clobbers config you've customized — with
@@ -61,6 +64,13 @@ $env:DB_PASSWORD = "the-password-you-set"
 
 If `psql` or `node` still isn't found immediately after an install, close and reopen PowerShell
 (PATH changes need a fresh shell) and run the script again.
+
+**pgvector on Windows:** no winget package exists. Install it via the PostgreSQL installer's
+bundled **Application Stack Builder** (Start Menu → PostgreSQL 16 → Application Stack Builder →
+Spatial Extensions → pgVector) or a prebuilt release from
+[github.com/pgvector/pgvector](https://github.com/pgvector/pgvector#installation). If this is
+skipped, `scripts/setup.mjs`'s migration step fails with a clear Postgres error
+(`extension "vector" is not available`) rather than silently succeeding.
 
 ## Configuration
 

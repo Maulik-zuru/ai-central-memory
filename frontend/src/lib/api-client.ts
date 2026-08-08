@@ -20,7 +20,10 @@ interface RequestOptions extends RequestInit {
 async function rawRequest(path: string, options: RequestInit = {}) {
   const accessToken = useAuthStore.getState().accessToken;
   const headers = new Headers(options.headers);
-  headers.set("Content-Type", "application/json");
+  // FormData sets its own multipart boundary — forcing JSON here would break image uploads.
+  if (!(options.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
   return fetch(`${API_URL}${path}`, {

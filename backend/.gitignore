@@ -3,3 +3,5 @@ dist/
 .env
 .env.test
 *.log
+uploads/*
+!uploads/.gitkeep

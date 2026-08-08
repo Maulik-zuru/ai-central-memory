@@ -3,9 +3,9 @@
 An in-house clone of the MemoryPlugin product category: one memory layer shared across AI tools,
 built from `docs/Product_Requirements.md`, `docs/Backend_Plan.md`, and `docs/Frontend_Plan.md`.
 
-**Phase 1 (Accounts, Auth & API/Dashboard Foundations) is implemented.** See
-`docs/Phase1_Implementation_Plan.md` for scope, skill mapping, and traceability back to the PRD's
-`US-ACC-*` user stories.
+**Phase 1 (Accounts, Auth & API/Dashboard Foundations) and Phase 2 (Core Memory System) are
+implemented.** See `docs/Phase1_Implementation_Plan.md` and `docs/Phase2_Implementation_Plan.md`
+for scope, skill mapping, and traceability back to the PRD's `US-ACC-*`/`US-MEM-*` user stories.
 
 ## Structure
 
@@ -16,7 +16,7 @@ docs/       Product requirements and phase-wise build plans
 scripts/    Cross-platform setup (see SETUP.md)
 ```
 
-## Running Phase 1 locally
+## Running it locally
 
 ### 1. One-command setup
 
@@ -60,6 +60,12 @@ cd backend && npm test
 4. Revoke the key from the UI — the same curl call immediately starts failing with 401.
 5. Settings → Sessions shows your active session; Settings → Privacy has the auto-capture
    consent toggles.
+6. Go to Memories, save a couple of near-identical facts — within a couple of seconds a
+   "suggestions" badge appears; open it to merge the duplicate or dismiss it.
+7. Click into a memory, edit it, and expand "View changes from previous version" to see a
+   word-level diff between versions.
+8. Upload an image memory (Memories → New memory → Image tab) and it appears in the list with a
+   thumbnail.
 
 ## Production-hardening pass
 
@@ -78,8 +84,21 @@ and `vercel-composition-patterns`:
   `Path=/api/auth`, which made it invisible to the frontend's own routes and broke the proxy check
   entirely. It's now `Path=/`, with a regression test in `backend/tests/auth.test.ts` asserting it.
 
+## Known simplifications (Phase 2)
+
+- **No real job queue.** Embedding generation runs as an in-process fire-and-forget call, not a
+  Redis/BullMQ job — see `docs/Phase2_Implementation_Plan.md` §10 for why, and what a real queue
+  would change.
+- **Duplicate/stale similarity thresholds** are calibrated against the deterministic stub
+  embedding provider (no LLM API key configured). Set `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in
+  `backend/.env` to use real providers — the thresholds will likely need re-tuning against real
+  embeddings' distance distribution.
+- **Image storage is local-disk only** (`backend/uploads/`), fine for local dev, not for a real
+  deployment — the `StorageProvider` interface is ready for an S3-compatible implementation.
+
 ## What's deferred
 
-Memory/bucket/chat-archive/file/Ask features, real Google OAuth credentials, Stripe billing, and
-data export/deletion are out of scope for Phase 1 — see `docs/Phase1_Implementation_Plan.md` §2 for
-the full in-scope/out-of-scope breakdown and which later phase picks each one up.
+Buckets-with-sharing, chat-archive/file/Ask features, real Google OAuth credentials, Stripe
+billing, and data export/deletion are out of scope through Phase 2 — see
+`docs/Phase1_Implementation_Plan.md` §2 and `docs/Phase2_Implementation_Plan.md` §2 for the full
+in-scope/out-of-scope breakdown and which later phase picks each one up.

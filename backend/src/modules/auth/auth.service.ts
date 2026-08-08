@@ -54,6 +54,11 @@ export const authService = {
         subscription: {
           create: { plan: 'core', status: 'trialing', trialEndsAt },
         },
+        // Every user needs a bucket before they can save a memory (Memory.bucketId is
+        // non-null) — see docs/Phase2_Implementation_Plan.md §5.1.
+        buckets: {
+          create: { name: 'Personal', isDefault: true },
+        },
       },
     });
 
@@ -94,6 +99,9 @@ export const authService = {
               status: 'trialing',
               trialEndsAt: new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000),
             },
+          },
+          buckets: {
+            create: { name: 'Personal', isDefault: true },
           },
         },
       });

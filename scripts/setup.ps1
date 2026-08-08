@@ -71,6 +71,26 @@ if (Test-Command "psql") {
   Write-Host ""
 }
 
+# --- 2b. pgvector (Phase 2: memory embeddings/similarity search) ---------------------------
+# No winget package — install via EDB's StackBuilder (bundled with the Windows installer) or a
+# prebuilt release. This can't be scripted reliably across Postgres/Windows versions, so this is
+# a checked prerequisite rather than an automated step.
+
+Write-Host "==> Checking for the pgvector extension"
+$pgBinForCheck = if (Test-Path "C:\Program Files\PostgreSQL\16\bin\psql.exe") { "C:\Program Files\PostgreSQL\16\bin" } else { $null }
+$vectorInstalled = $false
+if ($pgBinForCheck) {
+  $extDir = "C:\Program Files\PostgreSQL\16\share\extension"
+  $vectorInstalled = Test-Path (Join-Path $extDir "vector.control")
+}
+if (-not $vectorInstalled) {
+  Write-Host "    ! pgvector extension files were not found." -ForegroundColor Yellow
+  Write-Host "    Install it via StackBuilder (Start Menu > PostgreSQL 16 > Application Stack Builder," -ForegroundColor Yellow
+  Write-Host "    under Spatial Extensions / pgVector) or a prebuilt release from" -ForegroundColor Yellow
+  Write-Host "    https://github.com/pgvector/pgvector#installation, then re-run this script." -ForegroundColor Yellow
+  Write-Host "    (setup.mjs's migration will fail with a clear Postgres error if this step is skipped.)" -ForegroundColor Yellow
+}
+
 # --- 3. Make sure the PostgreSQL service is running -----------------------------------------
 
 Write-Host "==> Ensuring PostgreSQL service is running"

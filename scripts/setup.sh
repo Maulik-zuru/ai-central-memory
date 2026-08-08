@@ -85,6 +85,27 @@ else
   fi
 fi
 
+# --- 2b. pgvector (Phase 2: memory embeddings/similarity search) -----------------------------
+# Not bundled with Postgres itself — a separate extension package, installed regardless of
+# whether Postgres itself was just installed or already present.
+
+echo "==> Ensuring the pgvector extension is installed"
+if [ "$OS" = "Darwin" ] && have brew; then
+  brew install pgvector || true
+elif [ "$OS" = "Linux" ]; then
+  PG_VERSION="$(psql --version 2>/dev/null | grep -oE '[0-9]+' | head -1)"
+  if have apt-get; then
+    sudo apt-get install -y "postgresql-${PG_VERSION}-pgvector" || \
+      echo "    ! Could not install postgresql-${PG_VERSION}-pgvector automatically. Install pgvector manually: https://github.com/pgvector/pgvector#installation"
+  elif have dnf; then
+    sudo dnf install -y pgvector || \
+      echo "    ! Could not install pgvector automatically. Install it manually: https://github.com/pgvector/pgvector#installation"
+  elif have pacman; then
+    sudo pacman -Sy --noconfirm pgvector || \
+      echo "    ! Could not install pgvector automatically. Install it manually: https://github.com/pgvector/pgvector#installation"
+  fi
+fi
+
 # --- 3. Make sure Postgres is actually running ------------------------------------------------
 
 echo "==> Ensuring PostgreSQL is running"

@@ -9,9 +9,13 @@ import { errorHandler, notFoundHandler } from './shared/errorHandler';
 import { logger } from './shared/logger';
 import { prisma } from './shared/prisma';
 import { apiRateLimit } from './shared/rateLimit';
+import { UPLOAD_DIR } from './shared/providers/storage.provider';
 import { authRouter } from './modules/auth/auth.routes';
 import { apiKeyRouter } from './modules/apikey/apikey.routes';
 import { accountRouter } from './modules/account/account.routes';
+import { memoryRouter } from './modules/memory/memory.routes';
+import { suggestionRouter } from './modules/suggestion/suggestion.routes';
+import { captureRouter } from './modules/memory/capture.routes';
 
 export function createApp() {
   const app = express();
@@ -46,9 +50,15 @@ export function createApp() {
     }
   });
 
+  // Local-disk image memories (StorageProvider — see docs/Phase2_Implementation_Plan.md §3).
+  app.use('/uploads', express.static(UPLOAD_DIR));
+
   app.use('/api/auth', authRouter);
   app.use('/api/keys', apiRateLimit, apiKeyRouter);
   app.use('/api/account', apiRateLimit, accountRouter);
+  app.use('/api/memories', apiRateLimit, memoryRouter);
+  app.use('/api/suggestions', apiRateLimit, suggestionRouter);
+  app.use('/api/capture', apiRateLimit, captureRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

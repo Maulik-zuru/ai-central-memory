@@ -340,3 +340,34 @@ A user can create, edit, merge, and review the history of a memory without leavi
       "Personal"), not a broken affordance
 - [ ] `SETUP.md`/`scripts/setup.mjs` updated to provision Redis alongside Postgres, so Phase 2
       isn't only runnable in an environment someone happened to configure by hand
+
+## 10. Implementation notes (post-build)
+
+What actually shipped, and where it deviated from this plan:
+
+- **No real job queue.** Redis/BullMQ was **not** added. `embedding.service.ts` instead runs as a
+  fire-and-forget `void` call right after the DB write — the caller never awaits it, so the
+  behavioral requirement ("queued automatically, not blocking the save") holds, but there's no
+  retry policy, no dead-letter handling, and it doesn't survive a process restart mid-job. The
+  function is deliberately job-shaped (one memory in, no return value) so swapping in a real queue
+  later is a one-line change at the call site, not a rewrite. `scripts/setup.sh`/`setup.ps1` were
+  **not** updated to provision Redis, since nothing in the running system uses it yet — doing so
+  now would have been installing infrastructure to match a claim rather than a need.
+- **pgvector** ended up genuinely required (not just planned) — `scripts/setup.sh` was updated to
+  install it via apt/dnf/pacman/Homebrew alongside Postgres; `setup.ps1` checks for it and points
+  to manual installation steps, since there's no Windows package manager entry for it.
+- **LLM provider**: both a deterministic stub (feature-hashing embedding + sentence-split
+  extraction, used whenever no API key is configured — dev, tests, CI) and real
+  Anthropic/OpenAI-backed implementations exist behind the same `LlmProvider` interface, exactly
+  as planned. The stub is what all 35 backend tests run against.
+- **Duplicate/stale thresholds** — `Product_Requirements.md` §10 flagged these as an open question
+  needing "a concrete first value." Resolved here: cosine distance ≤ 0.15 = duplicate, 0.15–0.55 =
+  stale-candidate, calibrated empirically against the stub embedding provider (see
+  `duplicate-detection.service.ts`'s comment for the actual test sentence pairs and distances).
+  These numbers are specific to the stub's feature-hashing behavior and will need
+  re-calibration once a real embedding model is wired in — cosine distances from a real model
+  don't have the same distribution as a bag-of-words hash.
+- **Storage**: local-disk only, as planned — no S3 implementation was written (the interface
+  supports adding one without touching `memory.service.ts`).
+- Everything else — schema, endpoints, versioning semantics, merge semantics, the frontend
+  surfaces — matches this plan as written.

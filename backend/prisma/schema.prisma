@@ -1,13 +1,16 @@
-// AI Memory & Context Platform — Phase 1 schema (Accounts, Auth & API Foundations)
-// See docs/Phase1_Implementation_Plan.md §4.1 for the design rationale.
+// AI Memory & Context Platform schema.
+// Phase 1: Accounts, Auth & API Foundations — see docs/Phase1_Implementation_Plan.md §4.1.
+// Phase 2: Core Memory System ("The Notebook") — see docs/Phase2_Implementation_Plan.md §5.1.
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
 }
 
 model User {
@@ -19,10 +22,13 @@ model User {
   autoCapture   Json     @default("{}") // per-platform auto-capture consent toggles (US-ACC-07)
   createdAt     DateTime @default(now())
 
-  apiKeys       ApiKey[]
-  subscription  Subscription?
-  auditLogs     AuditLog[]
-  sessions      Session[]
+  apiKeys      ApiKey[]
+  subscription Subscription?
+  auditLogs    AuditLog[]
+  sessions     Session[]
+  buckets      Bucket[]
+  memories     Memory[]
+  suggestions  MemorySuggestion[]
 }
 
 model Session {
@@ -74,4 +80,67 @@ model AuditLog {
   occurredAt DateTime @default(now())
 
   @@index([userId])
+}
+
+// --- Phase 2: Core Memory System ---------------------------------------------------------
+// See docs/Phase2_Implementation_Plan.md §5.1 for the design rationale, including why Bucket
+// is introduced here rather than in Phase 3: Memory.bucketId is never-null from its first
+// migration, so Phase 3's sharing/RBAC work is additive instead of a backfill.
+
+model Bucket {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  memories  Memory[]
+
+  @@index([userId])
+}
+
+model Memory {
+  id        String                       @id @default(cuid())
+  userId    String
+  user      User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bucketId  String
+  bucket    Bucket                       @relation(fields: [bucketId], references: [id])
+  type      String // "text" | "image"
+  content   String
+  imageUrl  String?
+  source    String // "manual" | "one_click" | "auto"
+  status    String                       @default("active") // "active" | "stale" | "merged" | "deleted"
+  embedding Unsupported("vector(1536)")?
+  createdAt DateTime                     @default(now())
+  updatedAt DateTime                     @updatedAt
+  versions  MemoryVersion[]
+
+  @@index([userId, status])
+  @@index([bucketId])
+}
+
+model MemoryVersion {
+  id         String   @id @default(cuid())
+  memoryId   String
+  memory     Memory   @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+  content    String
+  changedBy  String // userId, or "system" for merges
+  changeType String // "create" | "edit" | "merge"
+  createdAt  DateTime @default(now())
+
+  @@index([memoryId])
+}
+
+model MemorySuggestion {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         String // "duplicate" | "stale" | "capture"
+  memoryIdA    String? // null for a "capture" suggestion (draft, not yet a real Memory)
+  memoryIdB    String? // null for "capture" and unused for legacy single-memory suggestions
+  draftContent String? // populated only for "capture" suggestions awaiting confirmation
+  status       String   @default("pending") // "pending" | "approved" | "dismissed"
+  createdAt    DateTime @default(now())
+
+  @@index([userId, status])
 }
