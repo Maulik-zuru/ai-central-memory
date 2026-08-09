@@ -5,3 +5,5 @@ dist/
 *.log
 uploads/*
 !uploads/.gitkeep
+# Phase 11 data-export archives: complete plaintext dumps of an account. Never committed.
+private-storage/
