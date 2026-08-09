@@ -1,7 +1,7 @@
 # Operations Runbook
 
 Phase 12 deliverable (`docs/Phase12_Implementation_Plan.md` §3). Covers backup/restore, the health
-endpoint, load testing, and the staged rollout plan. Everything in the Backup and Restore section
+endpoint, load testing, browser-extension verification status, and the staged rollout plan. Everything in the Backup and Restore section
 below has been executed for real against this codebase, not just written down — the recorded
 results are in §1.3.
 
@@ -53,7 +53,7 @@ extensions, indexes, or constraints.
 **Known limitation, stated rather than glossed over:** this drill ran against a development-sized
 database on the same host. It proves the procedure and the dump's completeness; it does not
 establish a restore-time RTO for a production-sized dataset. Re-run against a production-scale
-snapshot before the GA milestone in §4.
+snapshot before the GA milestone in §5.
 
 ---
 
@@ -158,7 +158,38 @@ delete any `DROP INDEX ..._hnsw_idx` lines.**
 
 ---
 
-## 4. Staged rollout plan
+## 4. Browser extension — verification status
+
+Verified 2026-08-08 by loading the built extension into a real Chromium instance
+(`--load-extension`) and driving the actual UI, not by inspection:
+
+| Check | Result |
+|---|---|
+| MV3 manifest loads; background service worker registers | ✅ |
+| Popup renders the unpaired "Connect your account" state | ✅ |
+| Connect opens the dashboard with a pairing code | ✅ correct origin |
+| Consent banner discloses scopes before granting | ✅ |
+| Confirming stores the key in `chrome.storage.session` | ✅ |
+| Popup transitions to the connected panel | ✅ |
+| Content script mounts on a matching page, into a **closed** shadow root | ✅ host page cannot inspect it |
+| Quick Inject affordance renders on the page | ✅ |
+| Phase 11 consent gate honoured with the extension's own paired key | ✅ `platform=chatgpt` off → 0 suggestions; `platform=claude` on → 1 |
+| Extension key blocked from `DELETE /api/account` and `POST /api/account/export` | ✅ both 403 |
+
+**Still open (unchanged from Phase 8):** the ChatGPT/Claude/Gemini DOM selectors in
+`extension/src/lib/site-adapters/` have **not** been verified against live, authenticated sessions
+— no such credentials exist in this environment. The verification above used a mock page matching
+the manifest's URL pattern, which proves the extension's own machinery (manifest, worker,
+messaging, pairing, shadow-DOM mount, consent gate) but not that the selectors match today's real
+ChatGPT/Claude/Gemini markup. Those sites ship DOM changes without notice. **This remains a
+Stage 1 (internal) gate item in §5 and must be done by hand against each live product.**
+
+Local development requires `npm run build:local` in `extension/` — the default `npm run build`
+targets production origins, and a production-origin build cannot talk to a local backend.
+
+---
+
+## 5. Staged rollout plan
 
 Per-user data isolation has been enforced at the bucket-membership layer since Phase 3, so cohorts
 do not need separate infrastructure — they are just accounts.
@@ -167,7 +198,9 @@ do not need separate infrastructure — they are just accounts.
 Team accounts only. Real personal data, used daily, so the "does it hold up in normal use" question
 gets an honest answer.
 - **Entry:** CI green; the restore drill in §1.3 re-run against production infrastructure.
-- **Exit:** no P1 defects for 3 consecutive days; `sync.rate` under 0.05; `embeddings.stale` at 0.
+- **Exit:** no P1 defects for 3 consecutive days; `sync.rate` under 0.05; `embeddings.stale` at 0;
+  **and the three site adapters verified by hand against live, authenticated ChatGPT, Claude, and
+  Gemini sessions** (§4) — the one part of the extension no automated check in this repo covers.
 
 ### Stage 2 — Closed beta (2–4 weeks, 25–50 accounts)
 Invited users across the three supported extension platforms, chosen to include people with large

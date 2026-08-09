@@ -9,18 +9,23 @@ specifically needs to know.
 
 ```sh
 npm install
-npm run dev      # Vite + CRXJS dev server with HMR
-npm run build    # production build → dist/
+npm run dev          # Vite + CRXJS dev server with HMR
+npm run build:local  # build targeting localhost:4000 / localhost:3000 → dist/
+npm run build        # production build → dist/
 npm run typecheck
 ```
 
-Load `dist/` (after `npm run build`) as an unpacked extension via `chrome://extensions` →
-Developer mode → "Load unpacked". For `npm run dev`, CRXJS supports loading the dev build the
-same way and hot-reloads on save.
+Load `dist/` as an unpacked extension via `chrome://extensions` → Developer mode → "Load
+unpacked". For `npm run dev`, CRXJS supports loading the dev build the same way and hot-reloads
+on save.
 
-`src/lib/config.ts`'s `API_BASE_URL` points at `http://localhost:4000` in dev
-(`import.meta.env.DEV`) and a production placeholder otherwise — update it to the real API origin
-before shipping, and keep `manifest.config.ts`'s `host_permissions` in sync with it exactly.
+**Use `build:local` when testing against a local stack.** `npm run build` bakes in the production
+API origin, so a production build cannot talk to a local backend at all.
+
+`src/lib/config.ts` reads `VITE_API_BASE_URL` and `VITE_DASHBOARD_URL`, both defaulting to the
+production origins. They are separate values on purpose: the dashboard the pairing flow opens is a
+different host from the API, and deriving one from the other silently broke pairing in production
+builds before this was split.
 
 ## Design direction — do not "fix" this back to a generic look
 

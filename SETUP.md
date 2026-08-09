@@ -115,3 +115,33 @@ psql -U postgres -h localhost -c "CREATE DATABASE ai_memory_test;"
 ```bash
 node scripts/setup.mjs
 ```
+
+## Browser extension
+
+The extension lives in `extension/` and is loaded as an unpacked Chrome extension.
+
+```bash
+cd extension
+npm install
+npm run build:local     # targets http://localhost:4000 / http://localhost:3000
+```
+
+Then in Chrome: **chrome://extensions** → enable *Developer mode* → *Load unpacked* → select
+`extension/dist`.
+
+**Use `build:local`, not `build`, for development.** `npm run build` targets the production API and
+dashboard origins, and a production-origin build cannot talk to a local backend — the API base URL
+is baked in at build time. Both origins are declared in the manifest's `host_permissions`, so the
+same manifest works for either build.
+
+Pairing: click the extension icon → **Connect**. It opens the dashboard's API-keys page with a
+pairing code; confirm there and the extension stores a scoped key in `chrome.storage.session`
+(cleared on browser restart by design — no long-lived key in plain local storage). You never copy
+or paste a key.
+
+The content script only appears on `chatgpt.com`, `chat.openai.com`, `claude.ai`, and
+`gemini.google.com`, and only once the extension is paired.
+
+> The DOM selectors in `extension/src/lib/site-adapters/` have not been verified against live,
+> authenticated sessions on those three products — see `docs/Operations_Runbook.md` §4. Everything
+> else in the extension is verified end-to-end.
