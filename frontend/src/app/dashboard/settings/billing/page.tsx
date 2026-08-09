@@ -39,6 +39,27 @@ export default function BillingSettingsPage() {
 
   if (!summary) return null;
 
+  // The tab is hidden when payments are off, but the route still resolves if someone lands on it
+  // from a bookmark or a stale link. Say so plainly rather than rendering a plan card for a plan
+  // that doesn't exist.
+  if (!summary.paymentsEnabled) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>No billing on this instance</CardTitle>
+          <CardDescription>
+            This instance of MemoryOS runs free. Every feature is available on your account, there
+            are no usage limits, and there is nothing to pay for.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Conversations stored</span>
+          <span>{summary.history.count}</span>
+        </CardContent>
+      </Card>
+    );
+  }
+
   const isPro = summary.plan === "pro";
   const remaining = daysLeft(summary.trialEndsAt);
 

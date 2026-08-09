@@ -10,6 +10,8 @@ import { GraphExplorer } from "@/components/intelligence/graph-explorer";
 
 export default function IntelligencePage() {
   const { account } = useSession();
+  // On a free deployment the server reports every account as entitled, so this is simply true —
+  // no separate branch needed, and no risk of the UI locking a feature the API happily serves.
   const isPro = account?.subscription?.plan === "pro";
 
   const graph = useQuery({ queryKey: ["intelligence-graph"], queryFn: () => api.knowledgeGraph(), enabled: isPro });

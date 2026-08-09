@@ -4,6 +4,7 @@ import { logger } from '../../shared/logger';
 import { getLlmProvider } from '../../shared/providers/llm.provider';
 import { requireBucketMembership } from '../../shared/bucketAccess';
 import { getJobRunner } from '../../shared/providers/job-runner.provider';
+import { entitledUserIds } from '../../shared/entitlements';
 
 const GRAPH_BATCH_LIMIT = 50;
 const GRAPH_EXTRACTION_INTERVAL_MS = 60 * 60 * 1000; // hourly — compute-heavy, Pro-only, no need to be more eager than that
@@ -103,12 +104,11 @@ export const graphService = {
     await prisma.message.update({ where: { id: message.id }, data: { graphProcessedAt: new Date() } });
   },
 
-  /** The JobRunner-scheduled entry point — Pro-plan users only (Phase 9's own stopgap inline
-   * check; Phase 10's requirePlan() replaces this once it exists — see Phase9_Implementation_Plan.md §9). */
+  /** The JobRunner-scheduled entry point. Processes entitled accounts only — which, on a
+   * deployment with PAYMENTS_ENABLED=false, means everyone: a free instance must actually build
+   * the graph rather than leave the feature visible but permanently empty. */
   async runBatch(limit: number = GRAPH_BATCH_LIMIT): Promise<void> {
-    const proUserIds = (
-      await prisma.subscription.findMany({ where: { plan: 'pro' }, select: { userId: true } })
-    ).map((s) => s.userId);
+    const proUserIds = await entitledUserIds();
     if (proUserIds.length === 0) return;
 
     const memories = await prisma.memory.findMany({

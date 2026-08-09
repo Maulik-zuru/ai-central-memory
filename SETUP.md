@@ -116,6 +116,19 @@ psql -U postgres -h localhost -c "CREATE DATABASE ai_memory_test;"
 node scripts/setup.mjs
 ```
 
+## Free vs. paid mode
+
+The product ships **free by default**. One environment variable in `backend/.env` controls it:
+
+```bash
+PAYMENTS_ENABLED=false   # or unset — every feature available to every account, no limits
+PAYMENTS_ENABLED=true    # Core/Pro plans, usage caps, and Stripe billing
+```
+
+With payments off there are no plan gates, no usage caps, and the billing endpoints return 404;
+the dashboard hides its Billing tab, trial banner, and upgrade prompts. See
+`docs/Payments_Feature_Flag.md` for the full behaviour matrix.
+
 ## Browser extension
 
 The extension lives in `extension/` and is loaded as an unpacked Chrome extension.

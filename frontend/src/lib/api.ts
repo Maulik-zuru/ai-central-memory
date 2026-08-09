@@ -9,6 +9,8 @@ export interface Account {
   autoCapture: Record<string, boolean>;
   smartMemoryEnabled: boolean;
   hasSeenTour: boolean;
+  /** False when this deployment runs free — the whole billing surface hides. */
+  paymentsEnabled: boolean;
   subscription: { plan: string; status: string; trialEndsAt: string | null } | null;
 }
 
@@ -266,6 +268,7 @@ export interface DeletionPreview {
 }
 
 export interface BillingSummary {
+  paymentsEnabled: boolean;
   plan: "core" | "pro";
   status: string;
   trialEndsAt: string | null;

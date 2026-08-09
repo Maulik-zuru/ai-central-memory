@@ -4,6 +4,7 @@ import { logger } from '../../shared/logger';
 import { getPaymentProvider, type WebhookEvent } from '../../shared/providers/payment.provider';
 import { historyLimitService } from '../chat-history/history-limit.service';
 import { analyticsService } from '../intelligence/analytics.service';
+import { isEntitled, paymentsEnabled } from '../../shared/entitlements';
 
 // US-BIL-03: a payment stays refund-eligible for 14 days, computed from the real paidAt timestamp
 // at write time — not "now minus a window" evaluated at read time, which would drift.
@@ -91,17 +92,29 @@ export const billingService = {
     await prisma.processedWebhookEvent.create({ data: { stripeEventId: event.id } });
   },
 
+  /**
+   * The pricing/usage page's data in one read.
+   *
+   * `paymentsEnabled: false` is part of the response rather than something the frontend infers:
+   * the UI needs to hide the entire billing surface, and guessing from "plan is pro and there is
+   * no trial" would be fragile. On a free deployment every account reports as fully entitled with
+   * no trial and no limits, because that is the truth.
+   */
   async getUsageAndBilling(userId: string) {
-    const subscription = await prisma.subscription.findUnique({ where: { userId } });
-    const history = await historyLimitService.usage(userId);
-    const proUsage = subscription?.plan === 'pro' ? await analyticsService.getUsage(userId) : null;
+    const enabled = paymentsEnabled();
+    const [subscription, history, usage] = await Promise.all([
+      prisma.subscription.findUnique({ where: { userId } }),
+      historyLimitService.usage(userId),
+      isEntitled(userId).then((entitled) => (entitled ? analyticsService.getUsage(userId) : null)),
+    ]);
 
     return {
-      plan: subscription?.plan ?? 'core',
-      status: subscription?.status ?? 'trialing',
-      trialEndsAt: subscription?.trialEndsAt ?? null,
+      paymentsEnabled: enabled,
+      plan: enabled ? (subscription?.plan ?? 'core') : 'pro',
+      status: enabled ? (subscription?.status ?? 'trialing') : 'active',
+      trialEndsAt: enabled ? (subscription?.trialEndsAt ?? null) : null,
       history,
-      usage: proUsage,
+      usage,
     };
   },
 

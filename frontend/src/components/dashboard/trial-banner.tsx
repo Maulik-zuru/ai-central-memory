@@ -15,6 +15,8 @@ function daysLeft(iso: string | null) {
 // appears, kept deliberately rare so it stays a signal, not wallpaper.
 export function TrialBanner({ account }: { account: Account }) {
   const sub = account.subscription;
+  // No trials and no upgrade path exist when the product is free.
+  if (!account.paymentsEnabled) return null;
   if (!sub || sub.plan === "pro") return null;
   if (sub.status !== "trialing" && sub.status !== "expired") return null;
 

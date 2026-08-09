@@ -16,6 +16,9 @@ export default function PricingPage() {
   const { isAuthenticated, account } = useSession();
   const [pending, setPending] = useState(false);
   const isPro = account?.subscription?.plan === "pro";
+  // A free deployment has no plans to compare. Rather than 404 a linked-to page, it states the
+  // truth: everything is included.
+  const paid = account?.paymentsEnabled ?? true;
 
   async function upgrade() {
     setPending(true);
@@ -25,6 +28,35 @@ export default function PricingPage() {
     } finally {
       setPending(false);
     }
+  }
+
+  if (!paid) {
+    return (
+      <div className="mx-auto flex min-h-[100dvh] max-w-2xl flex-col items-center justify-center gap-5 px-6 py-16 text-center">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-foreground font-display text-base text-background">
+          M
+        </div>
+        <h1 className="font-display text-3xl">Everything is included</h1>
+        <p className="text-sm text-muted-foreground">
+          This instance of MemoryOS runs free. Every feature — unlimited history, the knowledge
+          graph, full Smart Memory tuning, and precise search — is available on every account. There
+          is no paid tier and nothing to upgrade.
+        </p>
+        <ul className="mt-2 grid gap-2 text-left text-sm sm:grid-cols-2">
+          {PLAN_FEATURES.map((f) => (
+            <li key={f.label} className="flex items-start gap-2">
+              <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <span>{f.label}</span>
+            </li>
+          ))}
+        </ul>
+        <Button asChild size="sm" className="mt-2">
+          <Link href={isAuthenticated ? "/dashboard" : "/register"}>
+            {isAuthenticated ? "Back to dashboard" : "Create an account"}
+          </Link>
+        </Button>
+      </div>
+    );
   }
 
   return (

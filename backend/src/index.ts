@@ -25,7 +25,9 @@ graphService.registerScheduledJob();
 analyticsService.registerScheduledJob();
 
 // Phase 10's trial-expiry job — same JobRunner seam (docs/Phase10_Implementation_Plan.md §4).
-trialExpiryService.registerScheduledJob();
+// Skipped entirely when payments are off: with nothing to sell there are no trials to expire, and
+// running it would flip every account to `status: 'expired'` for no reason.
+if (env.paymentsEnabled) trialExpiryService.registerScheduledJob();
 
 // Phase 11: deletes expired export archives from storage. Without this, "expires after 7 days" is
 // only a database flag and a full account dump lives in storage indefinitely.

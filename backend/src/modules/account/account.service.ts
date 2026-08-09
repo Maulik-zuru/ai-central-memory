@@ -1,6 +1,7 @@
 import { prisma } from '../../shared/prisma';
 import { AppError } from '../../shared/errors';
 import { auditService } from '../audit/audit.service';
+import { paymentsEnabled } from '../../shared/entitlements';
 
 export const accountService = {
   async getMe(userId: string) {
@@ -19,13 +20,21 @@ export const accountService = {
       autoCapture: user.autoCapture as Record<string, boolean>,
       smartMemoryEnabled: user.smartMemoryEnabled,
       hasSeenTour: user.hasSeenTour,
-      subscription: user.subscription
-        ? {
-            plan: user.subscription.plan,
-            status: user.subscription.status,
-            trialEndsAt: user.subscription.trialEndsAt,
-          }
-        : null,
+      // Drives whether the dashboard renders any billing surface at all. Sent from the server
+      // rather than read from a NEXT_PUBLIC_ env var so the two can never disagree — the server
+      // is what actually enforces the gates.
+      paymentsEnabled: paymentsEnabled(),
+      // On a free deployment every account reports as fully entitled with no trial, because that
+      // is what it is — not a 'core' account that happens to bypass every check.
+      subscription: paymentsEnabled()
+        ? user.subscription
+          ? {
+              plan: user.subscription.plan,
+              status: user.subscription.status,
+              trialEndsAt: user.subscription.trialEndsAt,
+            }
+          : null
+        : { plan: 'pro', status: 'active', trialEndsAt: null },
     };
   },
 

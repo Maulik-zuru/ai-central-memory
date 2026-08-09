@@ -26,8 +26,28 @@ function assertDatabaseTls(url: string): string {
   return url;
 }
 
+/**
+ * Master switch for the whole monetization layer.
+ *
+ * `PAYMENTS_ENABLED=true` runs the product as a paid Core/Pro service: plan gates apply, limits
+ * are enforced, and the billing endpoints exist. Anything else — unset, empty, "false" — runs it
+ * as a fully free product: every Pro feature is available to every account, no caps apply, and
+ * the billing surface is not mounted at all.
+ *
+ * It defaults to OFF deliberately. A deployment that forgets to set it gives users too much
+ * rather than locking paying customers out of features they can see; and a self-hosted or
+ * internal instance, which is the common case for a tool like this, wants the free behaviour
+ * without having to know the flag exists.
+ */
+function readBool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  return ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase());
+}
+
 export const env = {
   port: Number(process.env.PORT ?? 4000),
+  paymentsEnabled: readBool('PAYMENTS_ENABLED', false),
   databaseUrl: assertDatabaseTls(required('DATABASE_URL')),
   jwtAccessSecret: required('JWT_ACCESS_SECRET'),
   jwtRefreshSecret: required('JWT_REFRESH_SECRET'),
