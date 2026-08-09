@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { sendToBackground } from "../lib/messages";
-import { API_BASE_URL } from "../lib/config";
+import { DASHBOARD_URL } from "../lib/config";
 
 // US-INT-01/pairing: the user never sees or types a raw API key. Clicking Connect opens the
 // dashboard's pairing-claim tab (an explicit, visible authorization click there) while this
@@ -19,7 +19,7 @@ export function ConnectScreen({ onConnected }: { onConnected: () => void }) {
     try {
       const { code } = await sendToBackground<{ code: string }>({ type: "PAIRING_START" });
       codeRef.current = code;
-      chrome.tabs.create({ url: `${API_BASE_URL.replace("http://localhost:4000", "http://localhost:3000")}/dashboard/settings/api-keys?pair=${code}` });
+      chrome.tabs.create({ url: `${DASHBOARD_URL}/dashboard/settings/api-keys?pair=${code}` });
 
       pollRef.current = setInterval(async () => {
         const result = await sendToBackground<{ status: string }>({ type: "PAIRING_POLL", code: codeRef.current! });

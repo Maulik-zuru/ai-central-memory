@@ -135,6 +135,27 @@ and is correct from an empty table onward.
 `context-preview` breaches its budget *with* the HNSW index in use and after `m`/`ef_construction`
 tuning has been attempted — not on row count alone, and not preemptively.
 
+### ⚠️ The vector-index trap — read before committing any generated migration
+
+These indexes are created in raw SQL because they sit on `Unsupported("vector(1536)")` columns
+Prisma's schema language cannot describe. **Prisma therefore does not know they exist and treats
+them as drift.** The next migration `prisma migrate dev` generates after them will silently open
+with `DROP INDEX` statements for all four.
+
+This already happened once: `20260808173630_phase12_has_seen_tour`, a one-line migration adding a
+boolean column, was generated with four `DROP INDEX` lines at the top and dropped every vector
+index in the database. Nothing failed. Every query kept returning correct results — just via a
+sequential scan again. It was caught in review, not by any test.
+
+Two defences are now in place:
+
+1. `tests/vector-index.test.ts` asserts all four indexes exist **and** are `USING hnsw` with
+   `vector_cosine_ops`. CI fails if a migration removes them.
+2. `20260808190000_restore_vector_indexes` recreates them idempotently (`IF NOT EXISTS`).
+
+**When you run `prisma migrate dev`, read the generated `migration.sql` before committing it and
+delete any `DROP INDEX ..._hnsw_idx` lines.**
+
 ---
 
 ## 4. Staged rollout plan

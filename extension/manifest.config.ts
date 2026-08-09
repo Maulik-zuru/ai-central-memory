@@ -29,10 +29,8 @@ export default defineManifest({
     },
   ],
   permissions: ['storage', 'scripting'],
-  host_permissions: [
-    // Overridden to http://localhost:4000/* in dev via vite.config.ts's mode check — this is the
-    // production API origin placeholder.
-    'https://api.aimemory.example/*',
-    'http://localhost:4000/*',
-  ],
+  // Must cover whatever origin src/lib/config.ts actually targets for the build being produced,
+  // or every background fetch fails with a permission error. Both are listed so a local build
+  // (npm run build:local) and a production build load from the same manifest.
+  host_permissions: ['https://api.aimemory.example/*', 'http://localhost:4000/*'],
 });

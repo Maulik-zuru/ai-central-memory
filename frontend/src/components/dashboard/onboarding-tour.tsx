@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Brain, Sparkles, Puzzle } from "lucide-react";
 import { api, type Account } from "@/lib/api";
@@ -40,7 +41,13 @@ const STEPS = [
  */
 export function OnboardingTour({ account }: { account: Account }) {
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(!account.hasSeenTour);
+  const searchParams = useSearchParams();
+  // A deep link carries a specific intent the user is mid-way through — the extension pairing
+  // flow lands on /dashboard/settings/api-keys?pair=<code> and needs its consent banner clickable.
+  // A welcome modal covering that is worse than useless: it blocks the very task the user came to
+  // do, on a brand-new account, which is exactly when this tour would otherwise fire.
+  const deepLinkedTask = searchParams.has("pair");
+  const [open, setOpen] = useState(!account.hasSeenTour && !deepLinkedTask);
   const [step, setStep] = useState(0);
 
   const markSeen = useMutation({
@@ -53,7 +60,7 @@ export function OnboardingTour({ account }: { account: Account }) {
     markSeen.mutate();
   }
 
-  if (account.hasSeenTour) return null;
+  if (account.hasSeenTour || deepLinkedTask) return null;
 
   const current = STEPS[step];
   const Icon = current.icon;
