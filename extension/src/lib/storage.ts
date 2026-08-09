@@ -4,10 +4,20 @@
 // chrome.storage.local so they survive a restart.
 
 const SESSION_KEY = "apiKey";
+const PENDING_PAIRING_KEY = "pendingPairing";
 const LOCAL_PREFS_KEY = "prefs";
 
 interface Prefs {
   lastBucketId?: string;
+}
+
+// A pairing attempt in flight, persisted so it survives the action popup closing — which Chrome
+// does the instant the dashboard tab it opens takes focus (see background/pairing.ts). Session
+// storage is the right lifetime here too: if the browser restarts mid-pairing, the code's own
+// server-side TTL will have long since made it moot anyway.
+export interface PendingPairing {
+  code: string;
+  expiresAt: string;
 }
 
 export async function getApiKey(): Promise<string | null> {
@@ -21,6 +31,19 @@ export async function setApiKey(key: string): Promise<void> {
 
 export async function clearApiKey(): Promise<void> {
   await chrome.storage.session.remove(SESSION_KEY);
+}
+
+export async function getPendingPairing(): Promise<PendingPairing | null> {
+  const result = await chrome.storage.session.get(PENDING_PAIRING_KEY);
+  return (result[PENDING_PAIRING_KEY] as PendingPairing | undefined) ?? null;
+}
+
+export async function setPendingPairing(pairing: PendingPairing): Promise<void> {
+  await chrome.storage.session.set({ [PENDING_PAIRING_KEY]: pairing });
+}
+
+export async function clearPendingPairing(): Promise<void> {
+  await chrome.storage.session.remove(PENDING_PAIRING_KEY);
 }
 
 export async function getPrefs(): Promise<Prefs> {

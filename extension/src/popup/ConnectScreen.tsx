@@ -3,34 +3,64 @@ import { sendToBackground } from "../lib/messages";
 import { DASHBOARD_URL } from "../lib/config";
 
 // US-INT-01/pairing: the user never sees or types a raw API key. Clicking Connect opens the
-// dashboard's pairing-claim tab (an explicit, visible authorization click there) while this
-// popup polls for the code to be claimed.
+// dashboard's pairing-claim tab (an explicit, visible authorization click there).
+//
+// The actual completion detection does NOT happen here. Chrome closes this popup the instant the
+// dashboard tab takes focus, so any polling loop that lived in this component would be torn down
+// before it could ever see the pairing complete — the background service worker's `chrome.alarms`
+// job is the durable path (background/pairing.ts). This component only ever asks "how's it
+// going?" — on mount (in case pairing finished while it was closed) and, best-effort, on a short
+// interval for as long as it happens to still be open.
 export function ConnectScreen({ onConnected }: { onConnected: () => void }) {
   const [status, setStatus] = useState<"idle" | "waiting" | "error">("idle");
-  const codeRef = useRef<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => () => {
-    if (pollRef.current) clearInterval(pollRef.current);
+  function stopPolling() {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }
+
+  async function check() {
+    const result = await sendToBackground<{ status: "pending" | "claimed" | "expired" | "none" }>({
+      type: "CHECK_PAIRING",
+    });
+    if (result.status === "claimed") {
+      stopPolling();
+      onConnected();
+    } else if (result.status === "expired") {
+      stopPolling();
+      setStatus("error");
+    } else if (result.status === "pending") {
+      setStatus("waiting");
+    }
+    return result.status;
+  }
+
+  useEffect(() => {
+    // Covers the case where the user re-opens the popup after already confirming on the dashboard
+    // tab — without this, they'd see "Connect" again for up to a minute (the alarm's period)
+    // despite pairing having already succeeded.
+    void check();
+    return stopPolling;
   }, []);
+
+  function startPolling() {
+    stopPolling();
+    // Best-effort only: on most platforms Chrome closes this popup the moment the dashboard tab
+    // below takes focus, tearing this interval down with it. It costs nothing to keep trying for
+    // as long as the popup happens to survive (some window managers don't steal focus instantly),
+    // but the alarm in the background worker is what actually finishes the job.
+    pollRef.current = setInterval(() => void check(), 2000);
+  }
 
   async function connect() {
     setStatus("waiting");
     try {
       const { code } = await sendToBackground<{ code: string }>({ type: "PAIRING_START" });
-      codeRef.current = code;
       chrome.tabs.create({ url: `${DASHBOARD_URL}/dashboard/settings/api-keys?pair=${code}` });
-
-      pollRef.current = setInterval(async () => {
-        const result = await sendToBackground<{ status: string }>({ type: "PAIRING_POLL", code: codeRef.current! });
-        if (result.status === "claimed") {
-          if (pollRef.current) clearInterval(pollRef.current);
-          onConnected();
-        } else if (result.status === "expired") {
-          if (pollRef.current) clearInterval(pollRef.current);
-          setStatus("error");
-        }
-      }, 2000);
+      startPolling();
     } catch {
       setStatus("error");
     }
@@ -48,6 +78,11 @@ export function ConnectScreen({ onConnected }: { onConnected: () => void }) {
       </p>
       {status === "error" && (
         <p className="text-sm text-[var(--destructive)]">That didn't work — try connecting again.</p>
+      )}
+      {status === "waiting" && (
+        <p className="text-sm text-[var(--muted-foreground)]">
+          Waiting for confirmation — you can close this popup, the connection will finish on its own.
+        </p>
       )}
       <button
         onClick={connect}

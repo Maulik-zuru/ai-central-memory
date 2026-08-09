@@ -83,8 +83,11 @@ Verified by loading the built extension into a real Chromium instance and drivin
 - Popup renders the unpaired state
 - Connect opens the dashboard at the correct origin with a pairing code
 - Consent banner discloses scopes before granting
-- Confirming stores the key in `chrome.storage.session`
-- Popup transitions to the connected panel
+- Confirming stores the key in `chrome.storage.session` — **and a freshly reopened popup reflects
+  it immediately**, fixed and re-verified 2026-08-09; the row this replaces
+  ("popup transitions to the connected panel") was a false positive from testing with devtools
+  attached to the popup, which happens to suppress the very failure mode a real user hit the next
+  day — see `Operations_Runbook.md` §4.1 for the root cause and the fix
 - Content script mounts on a matching page into a **closed** shadow root
 - Quick Inject affordance renders
 - Extension-scoped key is refused (403) by `DELETE /api/account` and `POST /api/account/export`

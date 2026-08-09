@@ -1,5 +1,6 @@
 import { backgroundApi } from "./api";
-import { clearApiKey, getApiKey, setApiKey } from "../lib/storage";
+import { checkPendingPairing, PAIRING_ALARM_NAME, startPairing } from "./pairing";
+import { clearApiKey, getApiKey } from "../lib/storage";
 import type { ExtensionMessage, ExtensionResponse } from "../lib/messages";
 
 // Written stateless-per-message throughout (docs/Phase8_BrowserExtension_Implementation_Plan.md
@@ -9,13 +10,13 @@ import type { ExtensionMessage, ExtensionResponse } from "../lib/messages";
 async function handle(message: ExtensionMessage): Promise<unknown> {
   switch (message.type) {
     case "PAIRING_START":
-      return backgroundApi.startPairing();
+      return startPairing();
 
-    case "PAIRING_POLL": {
-      const result = await backgroundApi.pollPairing(message.code);
-      if (result.status === "claimed") await setApiKey(result.key);
-      return result;
-    }
+    // No `code` on this message: the pending code lives in storage (see background/pairing.ts),
+    // so a popup that reopens after being closed mid-pairing can still ask "how did it go?"
+    // without having held onto anything itself.
+    case "CHECK_PAIRING":
+      return checkPendingPairing();
 
     case "GET_CONNECTION_STATE": {
       const apiKey = await getApiKey();
@@ -81,4 +82,11 @@ chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") {
     chrome.storage.local.set({ onboardingPending: true });
   }
+});
+
+// The durable half of pairing: fires on Chrome's schedule regardless of whether the popup that
+// started pairing is still open — which by the time this alarm exists, it almost certainly is
+// not (see background/pairing.ts for why).
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === PAIRING_ALARM_NAME) void checkPendingPairing();
 });

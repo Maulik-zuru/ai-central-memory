@@ -28,7 +28,10 @@ export default defineManifest({
       run_at: 'document_idle',
     },
   ],
-  permissions: ['storage', 'scripting'],
+  // 'alarms' drives the durable half of pairing (background/pairing.ts) — the action popup closes
+  // the instant the dashboard tab it opens takes focus, so nothing in the pairing flow may depend
+  // on a popup-owned timer surviving that.
+  permissions: ['storage', 'scripting', 'alarms'],
   // Must cover whatever origin src/lib/config.ts actually targets for the build being produced,
   // or every background fetch fails with a permission error. Both are listed so a local build
   // (npm run build:local) and a production build load from the same manifest.

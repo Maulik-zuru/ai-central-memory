@@ -160,8 +160,46 @@ delete any `DROP INDEX ..._hnsw_idx` lines.**
 
 ## 4. Browser extension — verification status
 
-Verified 2026-08-08 by loading the built extension into a real Chromium instance
-(`--load-extension`) and driving the actual UI, not by inspection:
+### 4.1 Correction to the 2026-08-08 verification: pairing did not actually complete
+
+The 2026-08-08 pass below recorded "Popup transitions to the connected panel — ✅", observed while
+manually driving the popup with devtools attached to it. That was a false positive: attaching
+devtools to a popup document keeps Chrome from auto-closing it, which is what made the transition
+observable at all. In ordinary use — no devtools, click Connect, confirm on the dashboard tab —
+Chrome closes the action popup the instant that new tab takes focus, tearing down the JS that owned
+the poll loop before it could ever see the pairing complete. The dashboard would show "Connected";
+the extension, reopened, would show "Connect your account" again, forever — the pairing had
+succeeded server-side but the key was never fetched back into the extension, since the server hands
+the delivered key out exactly once (see `extension-pairing.service.ts`'s `status()`).
+
+This was reported by a real user driving the real flow on 2026-08-09 and reproduced immediately.
+
+**Fix (2026-08-09):** pairing completion detection was moved out of the popup's `setInterval` and
+into the background service worker, which does not close with the popup:
+
+- `background/pairing.ts` — `startPairing()` persists the pending `{code, expiresAt}` to
+  `chrome.storage.session` and registers a `chrome.alarms` repeating alarm (Chrome's floor for a
+  packed extension is 1 minute; the server's pairing TTL is 10, so several checks fit before
+  expiry). `checkPendingPairing()` is the one place that decides what a status transition means for
+  stored state — called both by the alarm and on demand.
+- The popup (`ConnectScreen.tsx`) now sends `CHECK_PAIRING` on **mount**, not just after clicking
+  Connect — so reopening the popup after confirming on the dashboard reflects the connected state
+  immediately, without waiting for the alarm. Its own `setInterval` is now best-effort only (it
+  helps if the popup happens to survive) rather than the thing pairing depends on.
+- New `alarms` manifest permission.
+- 7 new unit tests (`extension/tests/pairing.test.ts`, `npm test` in `extension/`) cover the state
+  machine directly: alarm scheduling, one-shot key delivery, local vs. server-checked expiry, and
+  that a stray alarm left over after a browser restart clears itself rather than polling forever.
+
+**Re-verified 2026-08-09**, this time end-to-end against real `backend`/`frontend` dev servers with
+Playwright driving the actual built extension under Chromium (`--load-extension`, `xvfb-run`) —
+not devtools-assisted, and the exact regression shape: register through the real UI → open the
+popup → click Connect → the real dashboard tab opens and is confirmed → **close that popup
+entirely** → open a **brand-new** popup document, simulating a real reopen → it shows the connected
+panel immediately, and `chrome.storage.session` on the real background worker holds the delivered
+key. This is the scenario the 2026-08-08 pass never actually exercised.
+
+### 4.2 Full verification table (supersedes the 2026-08-08 pass for the pairing rows)
 
 | Check | Result |
 |---|---|
@@ -169,8 +207,8 @@ Verified 2026-08-08 by loading the built extension into a real Chromium instance
 | Popup renders the unpaired "Connect your account" state | ✅ |
 | Connect opens the dashboard with a pairing code | ✅ correct origin |
 | Consent banner discloses scopes before granting | ✅ |
-| Confirming stores the key in `chrome.storage.session` | ✅ |
-| Popup transitions to the connected panel | ✅ |
+| Confirming on the dashboard stores the key in the extension's `chrome.storage.session` | ✅ (2026-08-09, popup closed and reopened in between — see §4.1) |
+| A fresh popup reopened after confirming shows the connected panel, no wait | ✅ (2026-08-09) |
 | Content script mounts on a matching page, into a **closed** shadow root | ✅ host page cannot inspect it |
 | Quick Inject affordance renders on the page | ✅ |
 | Phase 11 consent gate honoured with the extension's own paired key | ✅ `platform=chatgpt` off → 0 suggestions; `platform=claude` on → 1 |
@@ -182,7 +220,7 @@ Verified 2026-08-08 by loading the built extension into a real Chromium instance
 the manifest's URL pattern, which proves the extension's own machinery (manifest, worker,
 messaging, pairing, shadow-DOM mount, consent gate) but not that the selectors match today's real
 ChatGPT/Claude/Gemini markup. Those sites ship DOM changes without notice. **This remains a
-Stage 1 (internal) gate item in §5 and must be done by hand against each live product.**
+Stage 1 (internal) gate item in §6 and must be done by hand against each live product.**
 
 Local development requires `npm run build:local` in `extension/` — the default `npm run build`
 targets production origins, and a production-origin build cannot talk to a local backend.

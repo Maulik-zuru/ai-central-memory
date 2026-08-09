@@ -5,7 +5,10 @@
 
 export type ExtensionMessage =
   | { type: "PAIRING_START" }
-  | { type: "PAIRING_POLL"; code: string }
+  // No `code` — the background worker tracks the pending pairing itself (chrome.storage.session),
+  // so this can be sent right after PAIRING_START or blind, on popup mount, to ask "how did it go
+  // while I was closed?" (see background/pairing.ts).
+  | { type: "CHECK_PAIRING" }
   | { type: "GET_CONNECTION_STATE" }
   | { type: "DISCONNECT" }
   | { type: "GET_ACCOUNT" }
