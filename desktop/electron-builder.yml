@@ -1,0 +1,39 @@
+appId: com.aimemory.agent
+productName: MemoryOS Agent
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**/*
+  - package.json
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  # Hardened runtime + entitlements are required for notarization. Neither the signing identity
+  # nor the notarization credentials live in this repository, so a build produced without them is
+  # unsigned and macOS will refuse to open it without an explicit override. See
+  # docs/Phase13_DesktopAgent_Implementation_Plan.md §9.1.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  # Falls out of the same config and is deliberately unclaimed — the PRD names macOS and Windows,
+  # and no Linux build has been tested.
+  target: [AppImage]
+
+publish: null

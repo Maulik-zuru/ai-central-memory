@@ -189,7 +189,38 @@ targets production origins, and a production-origin build cannot talk to a local
 
 ---
 
-## 5. Staged rollout plan
+## 5. Desktop agent — verification status
+
+Verified on this machine, against a live backend (2026-08-09):
+
+| Check | Result |
+|---|---|
+| Pair → device row + scoped key with no `apikey:manage` | pass |
+| Key delivered once; second poll reports `expired` | pass |
+| Real Claude Code JSONL parsed; planted `sk-` key stripped before queueing | pass |
+| Queue drained → pending capture suggestions on the account | pass (2 suggestions) |
+| Platform consent off → next capture yields 0 suggestions | pass |
+| Device revoked → agent's next capture returns 401 and the uploader pauses | pass |
+| Headless Electron boot; renderer sees only the preload bridge, no Node globals | pass |
+
+**Not verified, and not claimable:**
+
+- No signed macOS or Windows installer exists. `electron-builder.yml` and the release matrix have
+  never run — signing and notarization require the respective platforms and certificates.
+- The app has never run on macOS or Windows. Tray behaviour, `safeStorage` (Keychain / DPAPI), and
+  the folder picker are unexercised on both.
+- Cursor and Codex sources ship disabled with the reason shown in the UI; only `claude-code`
+  captures anything.
+
+### Revoking a device in an incident
+
+`DELETE /api/desktop/devices/:id` from a logged-in session revokes the device *and* its API key in
+one step. The agent stops on its next request (401), pauses itself, and stops retrying — it does
+not need to be reachable for the revocation to take effect.
+
+---
+
+## 6. Staged rollout plan
 
 Per-user data isolation has been enforced at the bucket-membership layer since Phase 3, so cohorts
 do not need separate infrastructure — they are just accounts.

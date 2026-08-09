@@ -184,3 +184,38 @@ jobs:
       - name: Build
         working-directory: extension
         run: npm run build
+
+  desktop:
+    name: Desktop agent (typecheck + tests + headless smoke)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: desktop
+        run: npx tsc --noEmit
+
+      - name: Test
+        working-directory: desktop
+        run: npm test
+
+      - name: Headless smoke launch
+        working-directory: desktop
+        # Boots the packaged main process under a virtual display and asserts the renderer sees
+        # exactly the preload bridge and no Node globals. This is the cheap gate against a
+        # contextIsolation/sandbox regression, which is otherwise invisible in a diff.
+        run: |
+          sudo apt-get update && sudo apt-get install -y xvfb
+          npm run build
+          xvfb-run -a npx electron out/main/index.js --smoke-test --no-sandbox

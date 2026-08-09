@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+/*
+  Ported verbatim from frontend/src/app/globals.css.
+
+  A desktop shell is a new rendering context, not a new design language: the notebook identity —
+  paper, ink, cobalt, the WCAG-AA-corrected muted foreground — carries over unchanged, exactly as
+  it did for the browser extension in Phase 8. Keeping this a copy rather than a shared package is
+  deliberate: three build systems (Next.js, CRXJS, electron-vite) sharing one CSS entry point buys
+  coupling for no benefit at this size. If a token changes, it changes in all three.
+*/
+:root {
+  --radius: 0.75rem;
+
+  --background: #faf9f5;
+  --foreground: #191b22;
+
+  --card: #ffffff;
+  --card-foreground: #191b22;
+
+  --primary: #2c4be0;
+  --primary-foreground: #f7f8ff;
+
+  --secondary: #f1efe7;
+  --secondary-foreground: #191b22;
+
+  --muted: #f1efe7;
+  /* Phase 12 a11y pass: was #6b6f7a, which cleared 4.5:1 on the paper background (4.77) but not
+     on --muted itself (4.36) — and muted text sits on muted surfaces all over this app. #5f636e
+     is 5.7:1 on paper and 5.22:1 on muted, so it passes WCAG AA everywhere the token is used
+     while still reading as secondary text. Fixed at the token rather than per-component, so the
+     next component to use it inherits a passing value. */
+  --muted-foreground: #5f636e;
+
+  --accent: #eef0fb;
+  --accent-foreground: #22317a;
+
+  --destructive: #b23b2e;
+  --destructive-foreground: #fef6f4;
+
+  --success: #3c7a5e;
+  --success-foreground: #f5faf7;
+
+  --tape: #f0b429;
+  --tape-foreground: #4a3300;
+
+  --border: #e9e7de;
+  --input: #e9e7de;
+  --ring: #2c4be0;
+
+  /* Soft, diffused elevation instead of a flat 1px border doing all the work — ambient shadows
+     read as "considered" rather than "default browser card". */
+  --shadow-card: 0 1px 2px rgba(25, 27, 34, 0.04), 0 8px 24px -12px rgba(25, 27, 34, 0.10);
+  --shadow-raised: 0 2px 4px rgba(25, 27, 34, 0.05), 0 16px 40px -16px rgba(25, 27, 34, 0.18);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 6px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-tape: var(--tape);
+  --color-tape-foreground: var(--tape-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+body {
+  font-feature-settings: "cv11", "ss01";
+}
+
+h1, h2, h3, .font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+/* Utility accent used for timestamps, ids, api keys — the one deliberately technical
+   typographic choice that keeps the "notebook" feel distinct from a generic SaaS dashboard. */
+.mono-tag {
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

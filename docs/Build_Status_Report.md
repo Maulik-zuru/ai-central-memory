@@ -1,16 +1,16 @@
 # Build Status Report — AI Memory & Context Platform
 
-**Date:** 2026-08-08
-**Branch:** `claude/memory-plugin-overview-ygcxpw` · **HEAD:** `ec136bf`
-**Scope:** Phases 1–12 (`Backend_Plan.md` / `Frontend_Plan.md`)
+**Date:** 2026-08-09
+**Branch:** `claude/desktop-agent`
+**Scope:** Phases 1–13 (`Backend_Plan.md` / `Frontend_Plan.md` / `Phase13_DesktopAgent_Implementation_Plan.md`)
 
 ---
 
 ## 1. Executive summary
 
-Phases 1–12 are implemented and the automated suite is green: **137 backend tests across 20
-suites, passing on three consecutive runs.** Frontend and browser extension both typecheck and
-build.
+Phases 1–13 are implemented and the automated suite is green: **160 backend tests across 22
+suites**, plus **30 desktop-agent unit tests**. Frontend, browser extension, and desktop app all
+typecheck and build.
 
 That headline is narrower than it sounds, and this report exists to say where. Three things
 qualify it:
@@ -89,6 +89,22 @@ Verified by loading the built extension into a real Chromium instance and drivin
 - Quick Inject affordance renders
 - Extension-scoped key is refused (403) by `DELETE /api/account` and `POST /api/account/export`
 
+### 3.4 Desktop agent (Phase 13)
+
+Verified by running the pipeline end-to-end against a live backend on this machine: pair a device,
+drop a fixture Claude Code transcript into a watched folder, and watch it become pending
+suggestions on the account.
+
+- `POST /api/desktop/pairing/start` → code, dashboard-session `claim` → device row + scoped key
+- Key delivered on the first status poll only; a second poll reports `expired`
+- A real Claude Code JSONL transcript parsed into 2 snippets; a planted `sk-` key was stripped by
+  `redact()` before anything was queued
+- Queue drained by the uploader → **2 pending capture suggestions** visible on the account
+- Platform consent toggled off → the next capture returned `201` with **0 suggestions**
+- Device revoked from the dashboard → the agent's very next capture returned **401**
+- Electron app boots headlessly under `xvfb`; the renderer sees exactly the preload bridge and
+  `window.require` / `window.process` / `window.module` are all `undefined`
+
 ---
 
 ## 4. Built but never exercised — the testing backlog
@@ -160,9 +176,27 @@ it is corrected here.
 
 ### 4.6 CI pipeline has never triggered
 
-`.github/workflows/ci.yml` is committed with four jobs (backend, frontend, extension,
-accessibility) but no push has yet run it. Expect first-run corrections around service-container
+`.github/workflows/ci.yml` is committed with five jobs (backend, frontend, extension,
+accessibility, desktop) but no push has yet run it. Expect first-run corrections around service-container
 readiness, Playwright browser installation, and cache paths.
+
+### 4.7 Desktop installers are unsigned, and two of three sources are stubs
+
+Three separate gaps, all in Phase 13 and all stated in that plan's §9 before implementation began:
+
+1. **No signed `.dmg` or `.exe` exists.** Notarization needs macOS plus an Apple Developer
+   identity; Authenticode needs a Windows certificate. `electron-builder.yml` and a
+   `macos-latest`/`windows-latest` release matrix are written and **have never run**. Until they
+   do, there is no artifact a user can install.
+2. **The app has never run on macOS or Windows.** It was built and smoke-launched on Linux under
+   `xvfb`. Tray behaviour, `safeStorage` (Keychain / DPAPI), the folder picker, and window chrome
+   are all unverified on the two platforms this phase targets.
+3. **Cursor and Codex sources are visible stubs.** No sample of either format was available, so
+   both ship disabled with the reason shown in the Sources screen. Only `claude-code` captures
+   anything today.
+
+Auto-update is wired behind `DESKTOP_UPDATE_FEED_URL` and is off; it cannot be tested without
+signed builds.
 
 ---
 
@@ -170,7 +204,8 @@ readiness, Playwright browser installation, and cache paths.
 
 ### 5.1 Phase 8 shipped one of seven sub-systems
 
-`Backend_Plan.md` Phase 8 ("Cross-AI Integrations") bundles seven sub-systems. One exists.
+`Backend_Plan.md` Phase 8 ("Cross-AI Integrations") bundles seven sub-systems. Two exist — the
+browser extension (Phase 8) and the desktop agent (Phase 13).
 
 | Sub-system | Story | Status |
 |---|---|---|
@@ -179,7 +214,7 @@ readiness, Playwright browser installation, and cache paths.
 | Custom GPT actions / OpenAPI subset | `US-INT-04` | Not built |
 | TypingMind plugin backend | `US-INT-05` | Not built |
 | Public/open API, versioned OpenAPI spec | `US-INT-06` | Not built |
-| Desktop sync agent (macOS), `DesktopAgentDevice` | `US-INT-07` | Not built |
+| Desktop sync agent (macOS + Windows), `DesktopAgentDevice` | `US-INT-07` | **Built** (Phase 13) — installers unsigned, see §4.7 |
 | Agent Skills packages | `US-INT-08` | Not built |
 | `Platform` registry table | — | Not built |
 
@@ -188,7 +223,9 @@ Phase 8's exit criterion reads:
 > "The same bucket's context can be pulled via the extension, via MCP from Cursor, and via the
 > public API, and all three return consistent results."
 
-**Two of those three paths do not exist**, so this criterion cannot currently be met.
+**Two of those three paths do not exist**, so this criterion cannot currently be met. The desktop
+agent narrows the gap but does not close it: it is a fourth *capture* client, not an MCP or public
+API surface.
 
 This was a deliberate, documented decision — `Phase8_BrowserExtension_Implementation_Plan.md`
 states in its opening that it scopes only the browser extension and names the other six as tracked
@@ -256,12 +293,16 @@ Recorded because each was caught by *running* something, not by reading it.
 
 ## 7. Test coverage
 
-**137 tests across 20 suites**, run against a real Postgres with pgvector (no database mocking).
+**160 backend tests across 22 suites**, run against a real Postgres with pgvector (no database
+mocking), plus **30 desktop-agent unit tests** on the pure pipeline modules.
 
 ```
-apikey  ask  auth  billing  bucket  capture  chat-history  compliance
-duplicate-stale  extension  file  image-memory  intelligence  memory
-ops  privacy  rate-limit  session  smart-memory  vector-index
+backend:  apikey  ask  auth  billing  bucket  capture  chat-history  compliance
+          desktop  duplicate-stale  extension  file  image-memory  intelligence
+          memory  ops  payments-flag  privacy  rate-limit  session  smart-memory
+          vector-index
+
+desktop:  redact  queue  claude-code.source  uploader
 ```
 
 **Not covered by automated tests:**
@@ -269,6 +310,8 @@ ops  privacy  rate-limit  session  smart-memory  vector-index
 - Frontend component/unit tests — none exist. Frontend verification has been manual browser
   driving plus `next build` and the axe-core sweep.
 - Extension unit tests — none exist. Verification was manual, in a real browser.
+- Desktop renderer/UI tests — none exist. The four screens have never been seen by a human on
+  macOS or Windows; only the headless smoke launch and the pipeline unit tests have run.
 - Load and soak testing — scripts exist, never run.
 - Real-provider integration (Anthropic, OpenAI, Stripe, Resend) — stubs only.
 
@@ -329,7 +372,7 @@ caused a real problem.
 
 | Field | Value |
 |---|---|
-| Report version | 1.0 |
-| Verification date | 2026-08-08 |
-| Test result at time of writing | 137 passed / 137 total, 20 suites, 3 consecutive runs |
-| Related | `Operations_Runbook.md`, `Phase11_Implementation_Plan.md`, `Phase12_Implementation_Plan.md`, `Product_Requirements.md` |
+| Report version | 1.1 |
+| Verification date | 2026-08-09 |
+| Test result at time of writing | backend 160 passed / 160 total (22 suites); desktop 30 passed / 30 total |
+| Related | `Operations_Runbook.md`, `Phase11_Implementation_Plan.md`, `Phase12_Implementation_Plan.md`, `Phase13_DesktopAgent_Implementation_Plan.md`, `Payments_Feature_Flag.md`, `Product_Requirements.md` |

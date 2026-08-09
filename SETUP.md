@@ -158,3 +158,25 @@ The content script only appears on `chatgpt.com`, `chat.openai.com`, `claude.ai`
 > The DOM selectors in `extension/src/lib/site-adapters/` have not been verified against live,
 > authenticated sessions on those three products — see `docs/Operations_Runbook.md` §4. Everything
 > else in the extension is verified end-to-end.
+
+## Desktop agent
+
+The agent lives in `desktop/` (Electron + React, macOS and Windows).
+
+```bash
+cd desktop
+npm install
+VITE_API_BASE_URL=http://localhost:4000 VITE_DASHBOARD_URL=http://localhost:3000 npm run dev
+```
+
+Pairing: **Connect** in the app opens the dashboard at
+**Settings → Devices** with a pairing code; confirm there and the agent stores a scoped key
+encrypted with the OS keystore. Turn on a source under **Sources**, pick the folders to watch, and
+anything captured appears as a pending suggestion in the dashboard.
+
+Only the Claude Code source is implemented; Cursor and Codex ship disabled with the reason shown
+in the UI.
+
+> No signed installer exists — `npm run package:mac` / `package:win` need macOS and Windows plus
+> the respective signing certificates. See `docs/Operations_Runbook.md` §5 for exactly what has
+> and has not been verified.
