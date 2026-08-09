@@ -37,7 +37,8 @@ model User {
   monthlyInsights MonthlyInsight[]
   files         File[]
   askConversations AskConversation[]
-  extensionPairingCodes ExtensionPairingCode[]
+  devicePairingCodes DevicePairingCode[]
+  desktopDevices DesktopAgentDevice[]
   knowledgeGraphNodes KnowledgeGraphNode[]
   knowledgeGraphEdges KnowledgeGraphEdge[]
   usageAnalyticsEvents UsageAnalyticsEvent[]
@@ -366,9 +367,18 @@ model AskMessage {
 // See docs/Phase8_BrowserExtension_Implementation_Plan.md §5.1. Short-lived, claimed once by an
 // authenticated dashboard session — never issues an ApiKey directly, no special exception to
 // apiKeyService.issue()'s existing "caller never sees keyHash again" rule.
-model ExtensionPairingCode {
+//
+// Phase 13 renamed this model from ExtensionPairingCode: the desktop agent pairs the exact same
+// way, so one table serves both clients rather than two tables drifting apart
+// (docs/Phase13_DesktopAgent_Implementation_Plan.md §6.1). @@map keeps the physical table name,
+// making this a column add rather than a data move.
+model DevicePairingCode {
   id           String    @id @default(cuid())
   code         String    @unique
+  // Which client minted this code. status()/claim() both check it, so a desktop code presented to
+  // the extension endpoint (or the reverse) is rejected rather than quietly issuing a key with
+  // the wrong scope set.
+  client       String    @default("extension") // "extension" | "desktop"
   userId       String?
   user         User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
   consumedAt   DateTime?
@@ -382,6 +392,30 @@ model ExtensionPairingCode {
   createdAt    DateTime  @default(now())
 
   @@index([code])
+  @@map("ExtensionPairingCode")
+}
+
+// --- Phase 13: Desktop agent (macOS + Windows) -----------------------------------------------
+// See docs/Phase13_DesktopAgent_Implementation_Plan.md §6.1. One row per paired machine — the
+// "authenticated device channel" Backend_Plan.md §Phase 8 called for. The device is a label and a
+// revocation handle; the actual authority lives in the scoped ApiKey it points at.
+model DesktopAgentDevice {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String // user-visible, e.g. "Maulik's MacBook Pro"
+  platform   String // "darwin" | "win32"
+  osVersion  String?
+  appVersion String?
+  // Nullable on purpose: revoking the key directly from Settings → API Keys must leave the device
+  // row intact (shown as revoked) rather than orphaning it or cascading a delete the user didn't
+  // ask for.
+  apiKeyId   String?   @unique
+  lastSeenAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
 }
 
 // --- Phase 9: Advanced Intelligence (Pro tier) ----------------------------------------------

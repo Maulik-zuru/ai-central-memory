@@ -18,6 +18,9 @@ export async function resetDb() {
   // ComplianceLog deliberately has no User relation (see schema.prisma) — surviving a user delete
   // is the point of it, which also means it survives resetDb's user delete and must be cleared here.
   await prisma.complianceLog.deleteMany();
+  // An unclaimed pairing code has no userId, so it never cascades from the user delete below.
+  await prisma.devicePairingCode.deleteMany();
+  await prisma.desktopAgentDevice.deleteMany();
   await prisma.memorySuggestion.deleteMany();
   await prisma.memoryVersion.deleteMany();
   await prisma.memory.deleteMany();

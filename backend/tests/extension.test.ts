@@ -35,7 +35,7 @@ describe('Extension pairing (US-ACC-03 extended)', () => {
   it('rejects claiming an expired pairing code', async () => {
     const { token } = await seedAccount('ext-b@example.com');
     const code = await startPairing();
-    await prisma.extensionPairingCode.update({ where: { code }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    await prisma.devicePairingCode.update({ where: { code }, data: { expiresAt: new Date(Date.now() - 1000) } });
 
     const res = await request(app).post('/api/extension/pairing/claim').set('Authorization', `Bearer ${token}`).send({ code });
     expect(res.status).toBe(400);
