@@ -42,8 +42,9 @@ const STEPS = [
 export function OnboardingTour({ account }: { account: Account }) {
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
-  // A deep link carries a specific intent the user is mid-way through — the extension pairing
-  // flow lands on /dashboard/settings/api-keys?pair=<code> and needs its consent banner clickable.
+  // A deep link carries a specific intent the user is mid-way through — the extension and desktop
+  // pairing flows land on /dashboard/settings/{api-keys,devices}?pair=<code> and need their consent
+  // banner clickable.
   // A welcome modal covering that is worse than useless: it blocks the very task the user came to
   // do, on a brand-new account, which is exactly when this tour would otherwise fire.
   const deepLinkedTask = searchParams.has("pair");

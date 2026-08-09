@@ -32,6 +32,27 @@ export interface Session {
   createdAt: string;
 }
 
+// Phase 13 (US-INT-07): a paired desktop agent. `revoked` is the only state that matters to the
+// UI — a revoked device keeps its row so the list shows what was disconnected and when.
+export interface DesktopDevice {
+  id: string;
+  name: string;
+  platform: string;
+  osVersion: string | null;
+  appVersion: string | null;
+  lastSeenAt: string | null;
+  revoked: boolean;
+  createdAt: string;
+}
+
+export interface DesktopPairingClaim {
+  code: string;
+  deviceName: string;
+  platform: string;
+  osVersion?: string;
+  appVersion?: string;
+}
+
 export interface Memory {
   id: string;
   bucketId: string;
@@ -468,6 +489,14 @@ export const api = {
 
   claimExtensionPairing: (code: string): Promise<{ apiKeyId: string }> =>
     apiRequest("/api/extension/pairing/claim", { method: "POST", body: JSON.stringify({ code }) }),
+
+  claimDesktopPairing: (input: DesktopPairingClaim): Promise<{ apiKeyId: string; deviceId: string }> =>
+    apiRequest("/api/desktop/pairing/claim", { method: "POST", body: JSON.stringify(input) }),
+
+  desktopDevices: (): Promise<{ devices: DesktopDevice[] }> => apiRequest("/api/desktop/devices"),
+
+  revokeDesktopDevice: (id: string): Promise<{ device: DesktopDevice }> =>
+    apiRequest(`/api/desktop/devices/${id}`, { method: "DELETE" }),
 
   knowledgeGraph: (params: { bucketId?: string } = {}): Promise<KnowledgeGraph> => {
     const search = new URLSearchParams();

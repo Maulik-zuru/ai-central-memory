@@ -7,11 +7,19 @@ import { Label } from "@/components/ui/label";
 import { DataExportCard } from "@/components/settings/data-export-card";
 import { DeleteAccountCard } from "@/components/settings/delete-account-card";
 
-const PLATFORMS = [
+// These keys are the `platform` value each client sends to /api/capture, so they are the exact
+// strings the server checks — one list, no translation layer that could drift. Phase 13 split the
+// old catch-all "cursor" row into the three sources the desktop agent can actually watch.
+const BROWSER_PLATFORMS = [
   { key: "chatgpt", label: "ChatGPT" },
   { key: "claude", label: "Claude" },
   { key: "gemini", label: "Gemini" },
-  { key: "cursor", label: "Cursor / Claude Code" },
+];
+
+const DESKTOP_PLATFORMS = [
+  { key: "claude-code", label: "Claude Code" },
+  { key: "cursor", label: "Cursor" },
+  { key: "codex", label: "Codex" },
 ];
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -57,16 +65,39 @@ export default function PrivacyPage() {
             suggestion before it&apos;s saved — this only controls whether suggestions happen at all.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col divide-y divide-border">
-          {PLATFORMS.map((platform) => {
-            const enabled = account.autoCapture[platform.key] ?? true;
-            return (
-              <div key={platform.key} className="flex items-center justify-between py-3">
-                <Label className="font-normal">{platform.label}</Label>
-                <Toggle checked={enabled} onChange={(v) => setPlatform(platform.key, v)} />
-              </div>
-            );
-          })}
+        <CardContent className="flex flex-col gap-5">
+          <div className="flex flex-col divide-y divide-border">
+            <p className="pb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Browser extension
+            </p>
+            {BROWSER_PLATFORMS.map((platform) => {
+              const enabled = account.autoCapture[platform.key] ?? true;
+              return (
+                <div key={platform.key} className="flex items-center justify-between py-3">
+                  <Label className="font-normal">{platform.label}</Label>
+                  <Toggle checked={enabled} onChange={(v) => setPlatform(platform.key, v)} />
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex flex-col divide-y divide-border">
+            <p className="pb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Desktop agent
+            </p>
+            {DESKTOP_PLATFORMS.map((platform) => {
+              const enabled = account.autoCapture[platform.key] ?? true;
+              return (
+                <div key={platform.key} className="flex items-center justify-between py-3">
+                  <Label className="font-normal">{platform.label}</Label>
+                  <Toggle checked={enabled} onChange={(v) => setPlatform(platform.key, v)} />
+                </div>
+              );
+            })}
+            <p className="pt-3 text-xs text-muted-foreground">
+              These apply to any computer running the desktop agent. The agent also has its own
+              per-folder controls — both have to be on for anything to be captured.
+            </p>
+          </div>
         </CardContent>
       </Card>
 

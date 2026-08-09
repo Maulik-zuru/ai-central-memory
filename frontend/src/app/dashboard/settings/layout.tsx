@@ -9,6 +9,7 @@ const ALL_TABS = [
   { href: "/dashboard/settings", label: "Account" },
   { href: "/dashboard/settings/api-keys", label: "API Keys" },
   { href: "/dashboard/settings/sessions", label: "Sessions" },
+  { href: "/dashboard/settings/devices", label: "Devices" },
   { href: "/dashboard/settings/privacy", label: "Privacy" },
   { href: "/dashboard/settings/smart-memory", label: "Smart Memory" },
   { href: "/dashboard/settings/billing", label: "Billing", paidOnly: true },
