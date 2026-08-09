@@ -6,11 +6,18 @@ import { disconnect, registerAndGetToken, resetDb, waitFor } from './testUtils';
 import { prisma } from '../src/shared/prisma';
 import {
   UPLOAD_DIR,
+  PRIVATE_DIR,
   __setStorageProviderForTests,
   localDiskStorageProvider,
 } from '../src/shared/providers/storage.provider';
+import { exportService } from '../src/modules/compliance/export.service';
 
 const app = createApp();
+
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect)
+// tears down the Prisma connection as soon as the FIRST describe finishes, and every later
+// describe in the file then fails with "Engine is not yet connected".
+afterAll(disconnect);
 
 async function seedAccount(email: string) {
   const token = await registerAndGetToken(app, email);
@@ -68,7 +75,6 @@ async function seedFullAccount(email: string) {
 
 describe('Phase 11: data export (US-SEC-03, US-ACC-05)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('includes memories, conversations and file metadata — not just a subset', async () => {
     const { token, userId } = await seedFullAccount('export-a@example.com');
@@ -117,7 +123,7 @@ describe('Phase 11: data export (US-SEC-03, US-ACC-05)', () => {
     // about the job's error handling and not about cascade behaviour.
     __setStorageProviderForTests({
       ...localDiskStorageProvider,
-      async put() {
+      async putPrivate() {
         throw new Error('storage unavailable');
       },
     });
@@ -185,9 +191,135 @@ describe('Phase 11: data export (US-SEC-03, US-ACC-05)', () => {
   });
 });
 
+describe('Phase 11: export archives are private and reaped (security review follow-up)', () => {
+  beforeEach(resetDb);
+
+  it('stores the archive outside the publicly-served uploads directory', async () => {
+    const { token, userId } = await seedAccount('private-a@example.com');
+    await request(app).post('/api/account/export').set('Authorization', `Bearer ${token}`);
+    const completed = await waitFor(() =>
+      prisma.dataExportRequest.findFirst({ where: { userId } }).then((r) => (r?.status === 'complete' ? r : undefined)),
+    );
+
+    // A full account dump must not be fetchable by URL alone: /uploads is served by
+    // express.static with no auth, so the key must not resolve inside it.
+    expect(completed.downloadKey).toMatch(/^private\//);
+    const publicPath = path.join(UPLOAD_DIR, completed.downloadKey!.replace('private/', ''));
+    await expect(access(publicPath)).rejects.toThrow();
+    await access(path.join(PRIVATE_DIR, completed.downloadKey!.replace('private/', '')));
+  });
+
+  it('reaps an expired archive from storage, not just from the database', async () => {
+    const { token, userId } = await seedAccount('private-b@example.com');
+    await request(app).post('/api/account/export').set('Authorization', `Bearer ${token}`);
+    const completed = await waitFor(() =>
+      prisma.dataExportRequest.findFirst({ where: { userId } }).then((r) => (r?.status === 'complete' ? r : undefined)),
+    );
+    const onDisk = path.join(PRIVATE_DIR, completed.downloadKey!.replace('private/', ''));
+    await access(onDisk);
+
+    await prisma.dataExportRequest.update({
+      where: { id: completed.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    expect(await exportService.reapExpired()).toBe(1);
+
+    await expect(access(onDisk)).rejects.toThrow();
+    const after = await prisma.dataExportRequest.findUnique({ where: { id: completed.id } });
+    expect(after?.downloadKey).toBeNull();
+  });
+
+  it('removes a completed archive when the account is deleted, never orphaning it', async () => {
+    const { token, userId } = await seedAccount('private-c@example.com');
+    await request(app).post('/api/account/export').set('Authorization', `Bearer ${token}`);
+    const completed = await waitFor(() =>
+      prisma.dataExportRequest.findFirst({ where: { userId } }).then((r) => (r?.status === 'complete' ? r : undefined)),
+    );
+    const onDisk = path.join(PRIVATE_DIR, completed.downloadKey!.replace('private/', ''));
+    await access(onDisk);
+
+    await request(app).delete('/api/account').set('Authorization', `Bearer ${token}`).send({ confirmation: 'DELETE' });
+
+    // DataExportRequest cascades away with the User, so if the key weren't collected before the
+    // delete, nothing would ever know this blob existed.
+    await expect(access(onDisk)).rejects.toThrow();
+  });
+});
+
+describe('Phase 11: API keys cannot exfiltrate or destroy the account (security review follow-up)', () => {
+  beforeEach(resetDb);
+
+  /** Mints a key with the same scopes the browser extension is issued (extension-pairing.service). */
+  async function extensionScopedKey(token: string) {
+    const res = await request(app)
+      .post('/api/keys')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'Browser Extension', scopes: ['memory:write', 'memory:read', 'context:read'] });
+    expect(res.status).toBe(201);
+    return res.body.apiKey.key as string;
+  }
+
+  it('lets an extension-scoped key do its real job', async () => {
+    const { token } = await seedAccount('scope-a@example.com');
+    const key = await extensionScopedKey(token);
+
+    const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${key}`);
+    expect(account.status).toBe(200);
+
+    const consent = await request(app)
+      .patch('/api/account/auto-capture')
+      .set('Authorization', `Bearer ${key}`)
+      .send({ autoCapture: { chatgpt: false } });
+    expect(consent.status).toBe(200);
+
+    const capture = await request(app)
+      .post('/api/capture')
+      .set('Authorization', `Bearer ${key}`)
+      .send({ snippet: 'We ship every Friday afternoon.', platform: 'claude' });
+    expect(capture.status).toBe(201);
+  });
+
+  it('refuses to let an extension-scoped key export the account', async () => {
+    const { token } = await seedAccount('scope-b@example.com');
+    const key = await extensionScopedKey(token);
+
+    for (const req of [
+      request(app).post('/api/account/export').set('Authorization', `Bearer ${key}`),
+      request(app).get('/api/account/export').set('Authorization', `Bearer ${key}`),
+      request(app).get('/api/account/deletion-preview').set('Authorization', `Bearer ${key}`),
+    ]) {
+      const res = await req;
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('INSUFFICIENT_SCOPE');
+    }
+  });
+
+  it('refuses to let any API key delete the account or sign out every device', async () => {
+    const { token, userId } = await seedAccount('scope-c@example.com');
+    const key = await extensionScopedKey(token);
+
+    const deleted = await request(app)
+      .delete('/api/account')
+      .set('Authorization', `Bearer ${key}`)
+      .send({ confirmation: 'DELETE' });
+    expect(deleted.status).toBe(403);
+    expect(deleted.body.error.code).toBe('SESSION_REQUIRED');
+    expect(await prisma.user.findUnique({ where: { id: userId } })).not.toBeNull();
+
+    const revoked = await request(app).post('/api/account/sessions/revoke-others').set('Authorization', `Bearer ${key}`);
+    expect(revoked.status).toBe(403);
+  });
+
+  it('still lets a signed-in dashboard session do all of it', async () => {
+    const { token } = await seedAccount('scope-d@example.com');
+    expect((await request(app).post('/api/account/export').set('Authorization', `Bearer ${token}`)).status).toBe(202);
+    expect((await request(app).get('/api/account/deletion-preview').set('Authorization', `Bearer ${token}`)).status).toBe(200);
+    expect((await request(app).post('/api/account/sessions/revoke-others').set('Authorization', `Bearer ${token}`)).status).toBe(200);
+  });
+});
+
 describe('Phase 11: permanent account deletion (US-SEC-04, US-ACC-06)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('rejects a deletion without the exact typed confirmation, changing nothing', async () => {
     const { token, userId } = await seedFullAccount('delete-a@example.com');
@@ -246,7 +378,10 @@ describe('Phase 11: permanent account deletion (US-SEC-04, US-ACC-06)', () => {
     const { token } = await seedAccount('delete-d@example.com');
     await request(app).delete('/api/account').set('Authorization', `Bearer ${token}`).send({ confirmation: 'DELETE' });
 
+    // 401 at the auth layer, not a 404 from the controller: the Session row cascaded away with
+    // the user, and authenticate() now rejects a token whose session no longer exists rather than
+    // letting a deleted account's bearer token reach application code at all.
     const afterwards = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
-    expect(afterwards.status).toBe(404);
+    expect(afterwards.status).toBe(401);
   });
 });

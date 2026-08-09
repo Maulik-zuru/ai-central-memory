@@ -6,6 +6,7 @@ import { insightService } from './modules/chat-history/insight.service';
 import { graphService } from './modules/intelligence/graph.service';
 import { analyticsService } from './modules/intelligence/analytics.service';
 import { trialExpiryService } from './modules/billing/trial-expiry.service';
+import { exportService } from './modules/compliance/export.service';
 
 const app = createApp();
 
@@ -25,6 +26,10 @@ analyticsService.registerScheduledJob();
 
 // Phase 10's trial-expiry job — same JobRunner seam (docs/Phase10_Implementation_Plan.md §4).
 trialExpiryService.registerScheduledJob();
+
+// Phase 11: deletes expired export archives from storage. Without this, "expires after 7 days" is
+// only a database flag and a full account dump lives in storage indefinitely.
+exportService.registerScheduledJob();
 
 // Without this, a deploy/restart kills in-flight requests and leaves Postgres connections open
 // until they time out — SIGTERM is what container orchestrators (Docker, Kubernetes, etc.) send

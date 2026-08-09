@@ -4,9 +4,11 @@ import { disconnect, registerAndGetToken, resetDb } from './testUtils';
 
 const app = createApp();
 
+// One disconnect for the whole file — see the note in compliance.test.ts.
+afterAll(disconnect);
+
 describe('Phase 11: auto-capture consent enforcement (US-ACC-07)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('stops suggestions for a disabled platform while leaving other platforms working', async () => {
     const token = await registerAndGetToken(app, 'consent-a@example.com');
@@ -63,7 +65,6 @@ describe('Phase 11: auto-capture consent enforcement (US-ACC-07)', () => {
 
 describe('Phase 11: revoke all other sessions (US-ACC-08)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   const credentials = { email: 'multi-device@example.com', password: 'Str0ngPassw0rd' };
 
@@ -93,9 +94,14 @@ describe('Phase 11: revoke all other sessions (US-ACC-08)', () => {
     const stillValid = await request(app).post('/api/auth/refresh').set('Cookie', first.headers['set-cookie']);
     expect(stillValid.status).toBe(200);
 
+    // Refresh ROTATES (auth.service.refresh revokes the old row and issues a new one), so the
+    // caller continues with the access token that refresh just returned — as any real client does,
+    // since authenticate() rejects a token whose session has been rotated away. Exactly one
+    // session is live afterwards: the rotated-in one.
     const after = await request(app)
       .get('/api/account/sessions')
-      .set('Authorization', `Bearer ${first.body.accessToken}`);
+      .set('Authorization', `Bearer ${stillValid.body.accessToken}`);
+    expect(after.status).toBe(200);
     expect(after.body.sessions).toHaveLength(1);
   });
 

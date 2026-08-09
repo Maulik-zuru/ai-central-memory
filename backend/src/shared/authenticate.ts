@@ -31,11 +31,26 @@ export const authenticate = asyncHandler(async (req: Request, _res: Response, ne
     return next();
   }
 
+  let payload;
   try {
-    const payload = verifyAccessToken(token);
-    req.auth = { userId: payload.sub, via: 'session', sessionId: payload.sessionId };
-    return next();
+    payload = verifyAccessToken(token);
   } catch {
     throw AppError.unauthorized('Invalid or expired access token', 'INVALID_ACCESS_TOKEN');
   }
+
+  // A valid signature is not enough: "sign out all other devices" (US-ACC-08) is the response to
+  // a suspected compromise, and without this check a stolen access token would keep working for
+  // the remainder of its TTL — up to 15 minutes of continued access after the user was told the
+  // session was revoked. One indexed primary-key read, the same cost the API-key branch above
+  // already pays for exactly the same reason.
+  const session = await prisma.session.findUnique({
+    where: { id: payload.sessionId },
+    select: { revokedAt: true },
+  });
+  if (!session || session.revokedAt) {
+    throw AppError.unauthorized('This session has been revoked', 'SESSION_REVOKED');
+  }
+
+  req.auth = { userId: payload.sub, via: 'session', sessionId: payload.sessionId };
+  return next();
 });

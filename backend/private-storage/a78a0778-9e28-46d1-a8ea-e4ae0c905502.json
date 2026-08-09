@@ -1,0 +1,30 @@
+{
+  "exportedAt": "2026-08-09T03:10:06.243Z",
+  "account": {
+    "id": "cmsl85nqy00cx7d1cr4lw75wf",
+    "email": "export-e@example.com",
+    "createdAt": "2026-08-09T03:10:06.203Z",
+    "autoCapture": {},
+    "smartMemoryEnabled": true,
+    "subscription": {
+      "plan": "core",
+      "status": "trialing",
+      "trialEndsAt": "2026-08-16T03:10:06.201Z"
+    }
+  },
+  "buckets": [
+    {
+      "id": "cmsl85nqy00cz7d1cjh0sethc",
+      "userId": "cmsl85nqy00cx7d1cr4lw75wf",
+      "name": "Personal",
+      "isDefault": true,
+      "parentId": null,
+      "createdAt": "2026-08-09T03:10:06.203Z"
+    }
+  ],
+  "memories": [],
+  "conversations": [],
+  "files": [],
+  "askThreads": [],
+  "suggestions": []
+}

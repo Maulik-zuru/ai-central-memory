@@ -1,0 +1,90 @@
+{
+  "exportedAt": "2026-08-09T03:15:11.862Z",
+  "account": {
+    "id": "cmsl8c7hr00007d47ndi6i3ul",
+    "email": "export-a@example.com",
+    "createdAt": "2026-08-09T03:15:11.728Z",
+    "autoCapture": {},
+    "smartMemoryEnabled": true,
+    "subscription": {
+      "plan": "core",
+      "status": "trialing",
+      "trialEndsAt": "2026-08-16T03:15:11.726Z"
+    }
+  },
+  "buckets": [
+    {
+      "id": "cmsl8c7hs00027d47go08yk4g",
+      "userId": "cmsl8c7hr00007d47ndi6i3ul",
+      "name": "Personal",
+      "isDefault": true,
+      "parentId": null,
+      "createdAt": "2026-08-09T03:15:11.728Z"
+    }
+  ],
+  "memories": [
+    {
+      "id": "cmsl8c7iz000a7d47zurr8kqz",
+      "bucketId": "cmsl8c7hs00027d47go08yk4g",
+      "type": "text",
+      "content": "The launch date moved to next Friday.",
+      "imageUrl": null,
+      "source": "manual",
+      "status": "active",
+      "createdAt": "2026-08-09T03:15:11.771Z",
+      "updatedAt": "2026-08-09T03:15:11.813Z",
+      "versions": [
+        {
+          "id": "cmsl8c7iz000b7d47k4rkrw5z",
+          "memoryId": "cmsl8c7iz000a7d47zurr8kqz",
+          "content": "The launch date moved to next Friday.",
+          "changedBy": "cmsl8c7hr00007d47ndi6i3ul",
+          "changeType": "create",
+          "createdAt": "2026-08-09T03:15:11.771Z"
+        }
+      ]
+    },
+    {
+      "id": "cmsl8c7k7000p7d47vah3ndfy",
+      "bucketId": "cmsl8c7hs00027d47go08yk4g",
+      "type": "image",
+      "content": "architecture diagram",
+      "imageUrl": "/uploads/d2800076-f715-4978-93cd-37d0e66293f9.png",
+      "source": "manual",
+      "status": "active",
+      "createdAt": "2026-08-09T03:15:11.816Z",
+      "updatedAt": "2026-08-09T03:15:11.816Z",
+      "versions": [
+        {
+          "id": "cmsl8c7k7000q7d47cmakfesh",
+          "memoryId": "cmsl8c7k7000p7d47vah3ndfy",
+          "content": "architecture diagram",
+          "changedBy": "cmsl8c7hr00007d47ndi6i3ul",
+          "changeType": "create",
+          "createdAt": "2026-08-09T03:15:11.816Z"
+        }
+      ]
+    }
+  ],
+  "conversations": [
+    {
+      "id": "cmsl8c7jn000h7d476mbsibx2",
+      "bucketId": "cmsl8c7hs00027d47go08yk4g",
+      "platform": "chatgpt",
+      "title": "DB decision",
+      "summary": null,
+      "importedAt": "2026-08-09T03:15:11.795Z",
+      "messages": [
+        {
+          "role": "user",
+          "content": "We chose Postgres with pgvector.",
+          "position": 0,
+          "createdAt": "2023-11-14T22:13:20.000Z"
+        }
+      ]
+    }
+  ],
+  "files": [],
+  "askThreads": [],
+  "suggestions": []
+}

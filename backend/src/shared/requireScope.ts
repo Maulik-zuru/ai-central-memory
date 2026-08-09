@@ -18,3 +18,26 @@ export function requireScope(scope: string) {
     return next();
   });
 }
+
+/**
+ * Stricter than any scope: the caller must be a logged-in dashboard session, full stop.
+ *
+ * For the irreversible operations where no legitimate programmatic caller exists. A scope could be
+ * granted to a key; this cannot. Without it, a leaked or malicious extension key — which lives in
+ * chrome.storage, a materially softer target than an httpOnly refresh cookie — could permanently
+ * destroy the account it was only ever trusted to save memories into. The typed-confirmation
+ * string is not a defence here: it's a fixed public constant, friction against accidents rather
+ * than against an attacker already holding a credential.
+ */
+export function requireSessionAuth() {
+  return asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.auth) throw AppError.unauthorized();
+    if (req.auth.via !== 'session') {
+      throw AppError.forbidden(
+        'This action requires a signed-in session and cannot be performed with an API key.',
+        'SESSION_REQUIRED',
+      );
+    }
+    return next();
+  });
+}

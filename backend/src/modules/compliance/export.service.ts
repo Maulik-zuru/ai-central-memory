@@ -2,11 +2,13 @@ import { prisma } from '../../shared/prisma';
 import { AppError } from '../../shared/errors';
 import { logger } from '../../shared/logger';
 import { getStorageProvider } from '../../shared/providers/storage.provider';
+import { getJobRunner } from '../../shared/providers/job-runner.provider';
 import { complianceService } from './compliance.service';
 
 // US-ACC-05's AC: "link expires after a reasonable window." Seven days matches the trial/refund
 // windows this codebase already uses as its unit of "a reasonable window for a human to act."
 const EXPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const REAPER_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * Assembles every category of the user's data (US-ACC-05: "not just a subset"). File *metadata*
@@ -121,7 +123,10 @@ export const exportService = {
 
     try {
       const archive = await buildArchive(row.userId);
-      const stored = await getStorageProvider().put(
+      // putPrivate, never put: this archive is a complete plaintext dump of the account. In the
+      // public namespace the identical bytes would be fetchable at /uploads/<key> with no
+      // credentials, making download()'s ownership and expiry checks below unenforceable.
+      const stored = await getStorageProvider().putPrivate(
         Buffer.from(JSON.stringify(archive, null, 2)),
         `memoryos-export-${row.userId}.json`,
       );
@@ -181,9 +186,50 @@ export const exportService = {
     if (row.status !== 'complete' || !row.downloadKey) {
       throw AppError.badRequest('This export is not ready yet', 'EXPORT_NOT_READY');
     }
-    if (row.expiresAt && row.expiresAt.getTime() <= Date.now()) {
+    // Fail CLOSED on a missing expiry. Today `expiresAt` is always written in the same statement
+    // that sets status/downloadKey, so a null here is unreachable — but the schema allows it, and
+    // any future writer that sets 'complete' without an expiry would otherwise mint a permanently
+    // valid download link.
+    if (!row.expiresAt || row.expiresAt.getTime() <= Date.now()) {
       throw AppError.forbidden('This export link has expired. Request a new export.', 'EXPORT_EXPIRED');
     }
     return getStorageProvider().get(row.downloadKey);
+  },
+
+  /**
+   * Deletes the stored archive for every export past its expiry and clears the key.
+   *
+   * Without this, "expires after 7 days" is a DB flag and nothing more: the blob containing a full
+   * account dump would sit in storage forever, and the only enforcement would be a single `if` in
+   * download(). Scheduled hourly rather than daily because the window between "expired" and
+   * "actually gone" is exactly the window in which a leaked key still yields data.
+   */
+  async reapExpired(): Promise<number> {
+    const expired = await prisma.dataExportRequest.findMany({
+      where: { downloadKey: { not: null }, expiresAt: { lt: new Date() } },
+      select: { id: true, downloadKey: true },
+    });
+
+    const storage = getStorageProvider();
+    let reaped = 0;
+    for (const row of expired) {
+      try {
+        await storage.delete(row.downloadKey!);
+        // Cleared only after the object is actually gone, so a failure here leaves the row
+        // eligible for the next sweep rather than orphaning the blob.
+        await prisma.dataExportRequest.updateMany({ where: { id: row.id }, data: { downloadKey: null } });
+        reaped++;
+      } catch (err) {
+        logger.error({ err, requestId: row.id }, 'Failed to reap expired export archive');
+      }
+    }
+    if (reaped > 0) logger.info({ reaped }, 'Reaped expired export archives');
+    return reaped;
+  },
+
+  registerScheduledJob(): void {
+    getJobRunner().schedule('export-archive-reaper', REAPER_INTERVAL_MS, async () => {
+      await exportService.reapExpired();
+    });
   },
 };

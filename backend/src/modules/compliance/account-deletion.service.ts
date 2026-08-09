@@ -16,17 +16,26 @@ function keyFromImageUrl(imageUrl: string): string {
 }
 
 async function collectStorageKeys(userId: string): Promise<string[]> {
-  const [imageMemories, files] = await Promise.all([
+  const [imageMemories, files, exports] = await Promise.all([
     prisma.memory.findMany({
       where: { userId, imageUrl: { not: null } },
       select: { imageUrl: true },
     }),
     prisma.file.findMany({ where: { userId }, select: { storageKey: true } }),
+    // Export archives are the easiest of the three to forget and the worst to leave behind: each
+    // one is a complete plaintext dump of this account. DataExportRequest cascades away with the
+    // User, so if the key isn't collected here, nothing in the system will ever know the blob
+    // exists — the exact orphaning this function's ordering comment warns about.
+    prisma.dataExportRequest.findMany({
+      where: { userId, downloadKey: { not: null } },
+      select: { downloadKey: true },
+    }),
   ]);
 
   return [
     ...imageMemories.map((m) => keyFromImageUrl(m.imageUrl!)),
     ...files.map((f) => f.storageKey),
+    ...exports.map((e) => e.downloadKey!),
   ];
 }
 
@@ -57,7 +66,41 @@ export const accountDeletionService = {
 
     const requestedAt = new Date();
     const storageKeys = await collectStorageKeys(userId);
+    const storage = getStorageProvider();
 
+    // allSettled, not a loop that aborts on the first throw: once ANY object is gone the account
+    // is already partially destroyed, and stopping there would leave the user with a half-erased
+    // account they believe is intact. Only a sweep that removed nothing is safely retryable.
+    const results = await Promise.allSettled(storageKeys.map((key) => storage.delete(key)));
+    const failedKeys = storageKeys.filter((_, i) => results[i].status === 'rejected');
+
+    if (failedKeys.length > 0 && failedKeys.length === storageKeys.length) {
+      logger.error({ userId, failedKeys: failedKeys.length }, 'Account deletion aborted: no objects could be removed');
+      await complianceService
+        .record({ userId, email: user.email, action: 'account.delete', requestedAt, outcome: 'failed' })
+        .catch(() => undefined);
+      // The database is untouched, so the whole operation can be retried cleanly.
+      throw AppError.badRequest(
+        'Deletion could not start because stored files could not be removed. Nothing was deleted — please try again.',
+        'DELETION_FAILED',
+      );
+    }
+
+    if (failedKeys.length > 0) {
+      // Logged for manual reconciliation: proceeding is still the right call (see above), but the
+      // leftover objects must be findable afterwards, and in a moment nothing in the database will
+      // reference them.
+      logger.error(
+        { userId, failedKeys },
+        'Some stored objects could not be removed; continuing with account deletion — these keys need manual cleanup',
+      );
+    }
+
+    await prisma.user.delete({ where: { id: userId } });
+
+    // Written AFTER the delete succeeds, using the email snapshotted above. ComplianceLog is the
+    // system's only evidence artifact for a regulator-facing erasure claim, so an entry asserting
+    // 'completed' for a deletion that then failed would be worse than no entry at all.
     await complianceService.record({
       userId,
       email: user.email,
@@ -66,23 +109,7 @@ export const accountDeletionService = {
       outcome: 'completed',
     });
 
-    const storage = getStorageProvider();
-    try {
-      for (const key of storageKeys) {
-        await storage.delete(key);
-      }
-    } catch (err) {
-      logger.error({ err, userId }, 'Account deletion aborted: storage cleanup failed');
-      // Leave the database untouched so the whole operation can be retried cleanly. A
-      // partially-deleted account (rows gone, blobs orphaned) is unrecoverable; a failed one is not.
-      throw AppError.badRequest(
-        'Deletion could not complete because stored files could not be removed. Nothing was deleted — please try again.',
-        'DELETION_FAILED',
-      );
-    }
-
-    await prisma.user.delete({ where: { id: userId } });
-    logger.info({ userId, objectsRemoved: storageKeys.length }, 'Account permanently deleted');
+    logger.info({ userId, objectsRemoved: storageKeys.length - failedKeys.length }, 'Account permanently deleted');
   },
 
   /** Powers the UI's "here is exactly what will be deleted" disclosure (US-ACC-06's AC: the user
