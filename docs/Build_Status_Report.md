@@ -375,4 +375,5 @@ caused a real problem.
 | Report version | 1.1 |
 | Verification date | 2026-08-09 |
 | Test result at time of writing | backend 160 passed / 160 total (22 suites); desktop 30 passed / 30 total |
+| Superseded on requirements coverage by | `Requirements_Conformance_Report.md` (2026-08-09) — a story-by-story audit that found four gaps this report did not, including the unbuilt US-INT-01 walkthrough |
 | Related | `Operations_Runbook.md`, `Phase11_Implementation_Plan.md`, `Phase12_Implementation_Plan.md`, `Phase13_DesktopAgent_Implementation_Plan.md`, `Payments_Feature_Flag.md`, `Product_Requirements.md` |
