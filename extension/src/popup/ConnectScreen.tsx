@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { BrainIcon, CheckCircleIcon, LinkSimpleIcon, ShieldCheckIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { sendToBackground } from "../lib/messages";
 import { DASHBOARD_URL } from "../lib/config";
 
@@ -67,29 +68,55 @@ export function ConnectScreen({ onConnected }: { onConnected: () => void }) {
   }
 
   return (
-    <div className="flex flex-col items-center gap-4 px-6 py-10 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--secondary)]">
-        <span className="font-serif text-lg">M</span>
+    <div className="flex flex-col items-center gap-5 px-6 py-9 text-center">
+      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--primary)]">
+        <BrainIcon size={26} weight="fill" color="var(--primary-foreground)" />
       </div>
-      <h1 className="text-lg font-medium">Connect your account</h1>
-      <p className="text-sm text-[var(--muted-foreground)]">
-        Sign in on the dashboard tab that opens, then confirm the connection there — you'll never need to copy or
-        paste an API key.
-      </p>
+      <div className="flex flex-col gap-1.5">
+        <h1 className="text-base font-semibold">Connect your account</h1>
+        <p className="max-w-[280px] text-xs leading-relaxed text-[var(--muted-foreground)]">
+          Sign in on the dashboard tab that opens, then confirm the connection there — you'll never need to copy or
+          paste an API key.
+        </p>
+      </div>
+
+      <div className="flex w-full flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-3 text-left">
+        <div className="flex items-center gap-2 text-xs">
+          <ShieldCheckIcon size={15} className="shrink-0 text-[var(--success)]" />
+          <span>No API key ever touches this popup</span>
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          <LinkSimpleIcon size={15} className="shrink-0 text-[var(--success)]" />
+          <span>Works across ChatGPT, Claude, and Gemini</span>
+        </div>
+      </div>
+
       {status === "error" && (
-        <p className="text-sm text-[var(--destructive)]">That didn't work — try connecting again.</p>
+        <div className="flex w-full items-center gap-2 rounded-[var(--radius-md)] bg-[var(--destructive-foreground)] px-3 py-2 text-left text-xs text-[var(--destructive)]">
+          <WarningCircleIcon size={15} weight="fill" className="shrink-0" />
+          That didn't work — try connecting again.
+        </div>
       )}
       {status === "waiting" && (
-        <p className="text-sm text-[var(--muted-foreground)]">
-          Waiting for confirmation — you can close this popup, the connection will finish on its own.
-        </p>
+        <div className="flex w-full items-center gap-2 rounded-[var(--radius-md)] bg-[var(--primary-tint)] px-3 py-2 text-left text-xs text-[var(--primary)]">
+          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--primary)]" />
+          Waiting for confirmation — you can close this popup, it'll finish on its own.
+        </div>
       )}
+
       <button
         onClick={connect}
         disabled={status === "waiting"}
-        className="w-full rounded-full bg-[var(--primary)] px-4 py-2.5 text-sm font-medium text-[var(--primary-foreground)] disabled:opacity-60"
+        className="flex w-full items-center justify-center gap-1.5 rounded-full bg-[var(--primary)] px-4 py-2.5 text-sm font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)] disabled:opacity-60"
       >
-        {status === "waiting" ? "Waiting for confirmation…" : "Connect"}
+        {status === "waiting" ? (
+          "Waiting for confirmation…"
+        ) : (
+          <>
+            <CheckCircleIcon size={15} weight="bold" />
+            Connect
+          </>
+        )}
       </button>
     </div>
   );

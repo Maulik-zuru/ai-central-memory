@@ -11,18 +11,36 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+// Fixed pixel geometry via inline style rather than Tailwind's spacing-scale utilities (w-11,
+// translate-x-5, etc.) — this control is small enough that any scale mismatch between the track,
+// thumb, and translate distance is immediately visible as the thumb clipping the track's edge.
+// Explicit numbers keep the 2px margin provable at a glance instead of derived from three
+// separate utility classes that all have to agree.
+const TOGGLE_TRACK_WIDTH = 40;
+const TOGGLE_TRACK_HEIGHT = 22;
+const TOGGLE_THUMB_SIZE = 18;
+const TOGGLE_INSET = 2;
+
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
       role="switch"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 rounded-full transition-colors ${checked ? "bg-primary" : "bg-muted"}`}
+      style={{ width: TOGGLE_TRACK_WIDTH, height: TOGGLE_TRACK_HEIGHT }}
+      className={`relative shrink-0 rounded-full transition-colors ${checked ? "bg-primary" : "bg-muted"}`}
     >
       <span
-        className={`absolute top-0.5 h-5 w-5 rounded-full bg-card shadow transition-transform ${
-          checked ? "translate-x-5" : "translate-x-0.5"
-        }`}
+        style={{
+          width: TOGGLE_THUMB_SIZE,
+          height: TOGGLE_THUMB_SIZE,
+          top: TOGGLE_INSET,
+          left: TOGGLE_INSET,
+          transform: checked
+            ? `translateX(${TOGGLE_TRACK_WIDTH - TOGGLE_THUMB_SIZE - TOGGLE_INSET * 2}px)`
+            : "translateX(0)",
+        }}
+        className="absolute rounded-full bg-card shadow transition-transform"
       />
     </button>
   );
