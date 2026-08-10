@@ -380,22 +380,188 @@ class OpenAiEmbeddingProvider {
   }
 }
 
+// OpenRouter exposes an OpenAI-compatible /chat/completions endpoint that can route to many
+// underlying models (Anthropic, OpenAI, Meta, etc.) behind one key — same LlmProvider surface as
+// AnthropicLlmProvider, so it's a drop-in alternative extraction backend. It also proxies
+// OpenAI-compatible embedding models, so it can independently serve embed() too.
+class OpenRouterLlmProvider implements LlmProvider {
+  constructor(
+    private apiKey: string,
+    private model = 'anthropic/claude-3.5-haiku',
+  ) {}
+
+  async extractMemoryCandidates(snippet: string): Promise<CaptureCandidate[]> {
+    const res = await this.complete(
+      'Extract atomic, self-contained facts worth remembering long-term from the conversation snippet. ' +
+        'Reply with one fact per line, no numbering, no commentary. If nothing is worth remembering, reply with an empty response.',
+      snippet,
+      512,
+    );
+    if (res === null) return stubExtract(snippet);
+    return res
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((content) => ({ content }));
+  }
+
+  async embed(text: string): Promise<number[]> {
+    const res = await fetch('https://openrouter.ai/api/v1/embeddings', {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ model: 'openai/text-embedding-3-small', input: text }),
+    });
+
+    if (!res.ok) {
+      logger.error({ status: res.status }, 'OpenRouter embedding call failed; falling back to stub');
+      return hashEmbed(text);
+    }
+
+    const body = (await res.json()) as { data?: { embedding?: number[] }[] };
+    return body.data?.[0]?.embedding ?? hashEmbed(text);
+  }
+
+  async suggestCategoryLabel(content: string): Promise<string> {
+    const res = await this.complete(
+      'Reply with a short (1-3 word) title-case category label for the memory below. No punctuation, no commentary.',
+      content,
+      16,
+    );
+    return res?.trim() || stubSuggestCategoryLabel(content);
+  }
+
+  async summarize(text: string): Promise<string> {
+    const res = await this.complete('Summarize the following in 2-3 sentences, no preamble.', text, 256);
+    return res ?? stubSummarize(text);
+  }
+
+  async rerank(query: string, candidates: { id: string; content: string }[]): Promise<string[]> {
+    if (candidates.length === 0) return [];
+    const listing = candidates.map((c, i) => `[${i}] ${c.content}`).join('\n');
+    const res = await this.complete(
+      'Given the query and a numbered list of candidate passages, reply with ONLY the indices ' +
+        'in order from most to least relevant, comma-separated (e.g. "2,0,1"). No commentary.',
+      `Query: ${query}\n\nCandidates:\n${listing}`,
+      64,
+    );
+    const order = res
+      ?.split(',')
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length);
+    if (!order || order.length !== candidates.length) return stubRerank(query, candidates);
+    return order.map((i) => candidates[i].id);
+  }
+
+  async answerWithContext(
+    question: string,
+    chunks: { id: string; content: string }[],
+  ): Promise<{ answer: string; usedChunkIds: string[] }> {
+    if (chunks.length === 0) return { answer: '', usedChunkIds: [] };
+    const listing = chunks.map((c, i) => `[${i}] ${c.content}`).join('\n\n');
+    const res = await this.complete(
+      'Answer the question using ONLY the numbered passages below. If they do not contain the ' +
+        'answer, say so plainly. End your reply with a line "USED: <comma-separated indices you drew from>".',
+      `Question: ${question}\n\nPassages:\n${listing}`,
+      512,
+    );
+    if (!res) return stubAnswerWithContext(chunks);
+    const usedMatch = res.match(/USED:\s*([\d,\s]+)/i);
+    const answer = res.replace(/USED:\s*[\d,\s]+/i, '').trim();
+    const usedChunkIds = usedMatch
+      ? usedMatch[1]
+          .split(',')
+          .map((s) => parseInt(s.trim(), 10))
+          .filter((i) => Number.isInteger(i) && i >= 0 && i < chunks.length)
+          .map((i) => chunks[i].id)
+      : [chunks[0].id];
+    return { answer, usedChunkIds };
+  }
+
+  async extractEntities(text: string): Promise<EntityExtractionResult> {
+    const res = await this.complete(
+      'Extract named entities (people, projects, clients, technologies, topics) mentioned in the ' +
+        'text and the relations between entities mentioned together. Reply with ONLY strict JSON ' +
+        'of the shape {"entities":[{"name":"...","type":"..."}],"relations":[{"from":"...","to":"...","label":"..."}]}. ' +
+        'No commentary, no markdown fences.',
+      text,
+      512,
+    );
+    if (!res) return stubExtractEntities(text);
+    try {
+      const parsed = JSON.parse(res) as EntityExtractionResult;
+      if (!Array.isArray(parsed.entities) || !Array.isArray(parsed.relations)) {
+        return stubExtractEntities(text);
+      }
+      return parsed;
+    } catch {
+      logger.error('OpenRouter entity-extraction reply was not valid JSON; falling back to stub');
+      return stubExtractEntities(text);
+    }
+  }
+
+  private headers() {
+    return {
+      'content-type': 'application/json',
+      authorization: `Bearer ${this.apiKey}`,
+      // Recommended by OpenRouter to attribute traffic; harmless if ignored.
+      'HTTP-Referer': 'https://github.com/anthropics',
+      'X-Title': 'MemoryOS',
+    };
+  }
+
+  private async complete(system: string, userText: string, maxTokens: number): Promise<string | null> {
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({
+        model: this.model,
+        max_tokens: maxTokens,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userText },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      logger.error({ status: res.status }, 'OpenRouter completion call failed; falling back to stub');
+      return null;
+    }
+    const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    return body.choices?.[0]?.message?.content?.trim() ?? null;
+  }
+}
+
 let cached: LlmProvider | null = null;
 
-/** Resolves the provider to use based on which API keys are configured — stub if none. */
+/**
+ * Resolves the provider to use based on which API keys are configured — stub if none.
+ *
+ * Precedence when multiple keys are set:
+ *  - Extraction/completion (extract, label, summarize, rerank, answer, entities): OpenRouter wins
+ *    over Anthropic if OPENROUTER_API_KEY is set (it can route to any model, including Claude),
+ *    otherwise Anthropic, otherwise stub.
+ *  - Embedding: OpenAI wins if OPENAI_API_KEY is set (first-party embeddings API), otherwise
+ *    OpenRouter's proxied embeddings if OPENROUTER_API_KEY is set, otherwise the deterministic
+ *    hash embedding.
+ */
 export function getLlmProvider(): LlmProvider {
   if (cached) return cached;
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   const openAiKey = process.env.OPENAI_API_KEY;
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const openRouterModel = process.env.OPENROUTER_MODEL;
 
-  if (!anthropicKey && !openAiKey) {
+  if (!anthropicKey && !openAiKey && !openRouterKey) {
     cached = stubLlmProvider;
     return cached;
   }
 
-  const extraction = anthropicKey ? new AnthropicLlmProvider(anthropicKey) : stubLlmProvider;
-  const embedding = openAiKey ? new OpenAiEmbeddingProvider(openAiKey) : null;
+  const openRouter = openRouterKey
+    ? new OpenRouterLlmProvider(openRouterKey, openRouterModel || undefined)
+    : null;
+  const extraction = openRouter ?? (anthropicKey ? new AnthropicLlmProvider(anthropicKey) : stubLlmProvider);
+  const embedding = openAiKey ? new OpenAiEmbeddingProvider(openAiKey) : openRouter;
 
   cached = {
     extractMemoryCandidates: (snippet) => extraction.extractMemoryCandidates(snippet),
