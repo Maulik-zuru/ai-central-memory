@@ -2,9 +2,21 @@
 
 /*
   Light-only "notebook" identity — no dark mode by design.
-  Palette: paper (bg) / ink (text) / cobalt (the one accent, ink-pen blue) / moss (success) /
+  Base palette: paper (bg) / ink (text) / cobalt (the one UI accent, ink-pen blue) / moss (success) /
   rust (destructive) / amber-tape (trial banner only). See docs/Phase1_Implementation_Plan.md
   for the rest of the design rationale.
+
+  Sticky-note palette added for the memory-card collage (marketing page): each card category gets
+  its own tag color, doing real structural work instead of cobalt repeating everywhere — the notes
+  are the content, not decoration, so they carry a full palette while the rest of the UI stays on
+  the single-accent system above.
+
+  The .marketing-surface class below re-declares --background/--card/--muted/--border as true
+  zero-chroma neutrals for the marketing page only: the :root values are cream (#faf9f5), the
+  exact warm-neutral "AI SaaS default" band the anti-slop rules ban — that reads correctly as the
+  dashboard's established "paper" identity, but on the marketing page it just looks generic. This
+  stays scoped rather than changing --background globally, so the dashboard's cream identity and
+  its WCAG-audited --muted-foreground pairing (tuned against #faf9f5 specifically) stay untouched.
 */
 :root {
   --radius: 0.75rem;
@@ -45,10 +57,39 @@
   --input: #e9e7de;
   --ring: #2c4be0;
 
+  /* Sticky-note tag colors — each at a contrast-checked 4.5:1+ text pairing against its own fill.
+     Slightly more saturated than a typical pastel: on a true-neutral canvas these carry the page's
+     entire color story, so they need to read as a deliberate choice, not a muted afterthought. */
+  --note-blue: #cfe0ff;
+  --note-blue-foreground: #15277a;
+  --note-orange: #ffdcc0;
+  --note-orange-foreground: #7a3008;
+  --note-green: #cdf0d6;
+  --note-green-foreground: #155c30;
+  --note-purple: #e5d8fb;
+  --note-purple-foreground: #43208a;
+  --note-pink: #fcd6e8;
+  --note-pink-foreground: #85104c;
+
   /* Soft, diffused elevation instead of a flat 1px border doing all the work — ambient shadows
      read as "considered" rather than "default browser card". */
   --shadow-card: 0 1px 2px rgba(25, 27, 34, 0.04), 0 8px 24px -12px rgba(25, 27, 34, 0.10);
   --shadow-raised: 0 2px 4px rgba(25, 27, 34, 0.05), 0 16px 40px -16px rgba(25, 27, 34, 0.18);
+  --shadow-note: 0 1px 1px rgba(25, 27, 34, 0.03), 0 6px 16px -6px rgba(25, 27, 34, 0.14);
+}
+
+/* Marketing page only: true zero-chroma neutrals in place of the dashboard's cream "paper"
+   tokens, scoped by re-declaring the same CSS variables inside this class instead of touching
+   :root — every existing bg-background/bg-card/border-border/bg-muted utility on the marketing
+   page resolves to these automatically, with zero edits to component class strings, and zero
+   effect on the dashboard/auth pages which never carry this class. */
+.marketing-surface {
+  --background: #ffffff;
+  --card: #f4f5f7;
+  --secondary: #eef0f3;
+  --muted: #eef0f3;
+  --border: #e2e5e9;
+  --input: #e2e5e9;
 }
 
 @theme inline {
@@ -79,7 +120,19 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
+  --color-note-blue: var(--note-blue);
+  --color-note-blue-foreground: var(--note-blue-foreground);
+  --color-note-orange: var(--note-orange);
+  --color-note-orange-foreground: var(--note-orange-foreground);
+  --color-note-green: var(--note-green);
+  --color-note-green-foreground: var(--note-green-foreground);
+  --color-note-purple: var(--note-purple);
+  --color-note-purple-foreground: var(--note-purple-foreground);
+  --color-note-pink: var(--note-pink);
+  --color-note-pink-foreground: var(--note-pink-foreground);
+
   --font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-marker: var(--font-marker), "Segoe UI", cursive;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
 }
@@ -90,6 +143,12 @@ body {
 
 h1, h2, h3, .font-display {
   font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+.font-marker {
+  font-family: var(--font-marker);
+  font-weight: 700;
   letter-spacing: -0.01em;
 }
 
@@ -104,5 +163,33 @@ h1, h2, h3, .font-display {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes marquee-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.marquee {
+  animation: marquee-scroll 32s linear infinite;
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.reveal {
+  animation: fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee {
+    animation: none !important;
+    transform: none !important;
+  }
+  .reveal {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
   }
 }

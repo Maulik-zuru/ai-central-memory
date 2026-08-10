@@ -1,10 +1,7 @@
-// proxy.ts intercepts "/" before this ever renders (redirecting to /dashboard or /login based on
-// the optimistic session-cookie check). This is just the fallback shown for the instant between
-// request and redirect, or if proxy.ts is ever bypassed.
+// proxy.ts redirects "/" to /dashboard when the optimistic session-cookie check finds a session.
+// Everyone else — logged out, or the cookie check bypassed — lands here on the marketing page.
+import { MarketingHome } from "@/app/(marketing)/marketing-home";
+
 export default function RootPage() {
-  return (
-    <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
-      Redirecting…
-    </div>
-  );
+  return <MarketingHome />;
 }
