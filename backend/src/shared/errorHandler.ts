@@ -8,7 +8,9 @@ import { logger } from './logger';
 // is logged with full context — the response body never leaks internals (nodejs-best-practices §4).
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   if (err instanceof AppError) {
-    return res.status(err.statusCode).json({ error: { code: err.code, message: err.message } });
+    return res.status(err.statusCode).json({
+      error: { code: err.code, message: err.message, ...(err.details ? { details: err.details } : {}) },
+    });
   }
 
   if (err instanceof ZodError) {

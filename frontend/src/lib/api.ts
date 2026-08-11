@@ -61,6 +61,7 @@ export interface Memory {
   imageUrl: string | null;
   source: "manual" | "one_click" | "auto";
   status: "active" | "stale" | "merged" | "deleted";
+  mergedIntoId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -168,9 +169,12 @@ export interface ChatSearchResult {
   score: number;
 }
 
+// Per-platform, not one account-wide total — the Core cap is 500 searchable conversations from a
+// single platform on a single account, not one pool shared across every connected platform
+// (MemoryPlugin_Clone_Spec.md §3.3).
 export interface HistoryUsage {
-  count: number;
   limit: number | null;
+  platforms: { platform: string; count: number }[];
 }
 
 export interface MonthlyInsight {

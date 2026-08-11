@@ -299,6 +299,56 @@ describe('Chat History Archive — limits and insights (US-ARC-06, US-ARC-08)', 
     expect(allowed.status).toBe(202);
   });
 
+  it('caps each connected platform independently, not against one shared account-wide total', async () => {
+    const { token, userId, bucketId } = await seedAccount('limits-b@example.com');
+
+    // At the cap for chatgpt specifically...
+    await prisma.conversation.createMany({
+      data: Array.from({ length: 500 }, (_, i) => ({
+        bucketId,
+        userId,
+        platform: 'chatgpt',
+        contentHash: `chatgpt-hash-${i}`,
+        title: `Conversation ${i}`,
+        status: 'ready' as const,
+      })),
+    });
+
+    const blockedChatgpt = await request(app)
+      .post('/api/chat-history/import')
+      .set('Authorization', `Bearer ${token}`)
+      .field('bucketId', bucketId)
+      .field('platform', 'chatgpt')
+      .attach('file', chatGptExport([{ role: 'user', text: 'one more', epochSec: 1700000000 }]), 'export.json');
+    expect(blockedChatgpt.status).toBe(403);
+
+    // ...but Claude hasn't imported anything yet, so it gets its own full 500, not "0 left."
+    const claudeExport = Buffer.from(
+      JSON.stringify([
+        {
+          uuid: 'c-1',
+          name: 'A brand new Claude conversation',
+          chat_messages: [{ sender: 'human', text: 'hello from claude', created_at: '2026-01-01T00:00:00Z' }],
+        },
+      ]),
+    );
+    const allowedClaude = await request(app)
+      .post('/api/chat-history/import')
+      .set('Authorization', `Bearer ${token}`)
+      .field('bucketId', bucketId)
+      .field('platform', 'claude')
+      .attach('file', claudeExport, 'export.json');
+    expect(allowedClaude.status).toBe(202);
+
+    const usage = await request(app).get('/api/chat-history/usage').set('Authorization', `Bearer ${token}`);
+    expect(usage.body.platforms).toEqual(
+      expect.arrayContaining([
+        { platform: 'chatgpt', count: 500 },
+        { platform: 'claude', count: 1 },
+      ]),
+    );
+  });
+
   it('produces a null summary (not a fabricated digest) for a month with no qualifying conversations', async () => {
     const { userId } = await seedAccount('insights-a@example.com');
     // Monthly insights are Pro-only (Phase 10 retrofit) — generateForUser silently no-ops for

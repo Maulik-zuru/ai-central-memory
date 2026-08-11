@@ -18,6 +18,7 @@ function toPublic(memory: MemoryRecord) {
     imageUrl: memory.imageUrl,
     source: memory.source,
     status: memory.status,
+    mergedIntoId: memory.mergedIntoId,
     createdAt: memory.createdAt,
     updatedAt: memory.updatedAt,
   };
@@ -75,6 +76,19 @@ export const memoryService = {
     const targetBucketId = bucketId
       ? (await requireBucketMembership(userId, bucketId, 'editor')).bucketId
       : await bucketService.getDefaultBucketId(userId);
+
+    // US-MEM-05 / MemoryPlugin_Clone_Spec.md §5.7: image memories aren't supported inside shared
+    // buckets yet — checked here, not just left as an unstated gap, so a memory saved into a
+    // bucket that's shared *right now* never becomes visible to collaborators through a code path
+    // nobody decided should allow that.
+    const memberCount = await prisma.bucketMember.count({ where: { bucketId: targetBucketId } });
+    if (memberCount > 1) {
+      throw AppError.badRequest(
+        'Image memories aren\'t supported in shared buckets yet. Save it to a bucket only you have access to.',
+        'IMAGE_NOT_SUPPORTED_IN_SHARED_BUCKET',
+      );
+    }
+
     const stored = await getStorageProvider().put(file.buffer, file.filename);
     const content = caption?.trim() || file.filename;
 
@@ -176,7 +190,9 @@ export const memoryService = {
         where: { id: keepId },
         data: { content: mergedContent, versions: { create: { content: mergedContent, changedBy: 'system', changeType: 'merge' } } },
       }),
-      prisma.memory.update({ where: { id: mergeId }, data: { status: 'merged' } }),
+      // Phase 14: the absorbed memory keeps a `mergedIntoId` pointer rather than just a status
+      // flip — "merged" alone tells you it's gone, not where it went.
+      prisma.memory.update({ where: { id: mergeId }, data: { status: 'merged', mergedIntoId: keepId } }),
     ]);
 
     void embeddingService.process(keepId, userId, mergedContent);

@@ -64,7 +64,22 @@ export const bucketService = {
     return bucket;
   },
 
-  async delete(userId: string, bucketId: string) {
+  /**
+   * US-ORG-01 AC: deleting a bucket that still holds memories asks what happens to them (move to
+   * the caller's default bucket, or delete them outright) rather than silently doing one or the
+   * other — or, as this refused to do before this phase, silently doing neither and just failing.
+   *
+   * Sub-buckets are a separate, still-unhandled case (out of scope for this phase — see
+   * docs/MemoryPlugin_Parity_Implementation_Plan.md Phase 14 §2) and keep blocking deletion
+   * outright, same as before.
+   *
+   * Files are not handled explicitly here: `File.bucket` cascades at the database level
+   * (schema.prisma's `onDelete: Cascade` on that relation), so they are never actually a blocker
+   * for the DELETE itself — but "delete-contents" and "move-to-default" would otherwise disagree
+   * with each other about files (silently deleting them either way) if left unhandled, so both
+   * branches move/delete files explicitly to match whatever the caller chose for memories.
+   */
+  async delete(userId: string, bucketId: string, strategy?: 'move-to-default' | 'delete-contents') {
     const bucket = await prisma.bucket.findUnique({ where: { id: bucketId } });
     if (!bucket) throw AppError.notFound('Bucket not found');
     await requireMembership(userId, bucketId, 'owner');
@@ -75,6 +90,39 @@ export const bucketService = {
     const childCount = await prisma.bucket.count({ where: { parentId: bucketId } });
     if (childCount > 0) {
       throw AppError.badRequest('Move or delete this bucket\'s sub-buckets first', 'BUCKET_HAS_CHILDREN');
+    }
+
+    const [memoryCount, fileCount] = await Promise.all([
+      prisma.memory.count({ where: { bucketId, status: { not: 'deleted' } } }),
+      prisma.file.count({ where: { bucketId } }),
+    ]);
+
+    if (memoryCount > 0 || fileCount > 0) {
+      if (!strategy) {
+        throw AppError.badRequest(
+          `This bucket has ${memoryCount} ${memoryCount === 1 ? 'memory' : 'memories'}${fileCount > 0 ? ` and ${fileCount} ${fileCount === 1 ? 'file' : 'files'}` : ''}. Choose whether to move them to your default bucket or delete them, then try again.`,
+          'BUCKET_NOT_EMPTY',
+          { memoryCount, fileCount },
+        );
+      }
+
+      if (strategy === 'move-to-default') {
+        const defaultBucketId = await this.getDefaultBucketId(userId);
+        await prisma.$transaction([
+          prisma.memory.updateMany({ where: { bucketId }, data: { bucketId: defaultBucketId } }),
+          prisma.file.updateMany({ where: { bucketId }, data: { bucketId: defaultBucketId } }),
+        ]);
+      } else {
+        // Hard delete, not the usual soft-delete: the bucket row itself is about to be removed,
+        // and `Memory.bucket` has no cascade (deliberately — see schema.prisma), so a soft-deleted
+        // memory left pointing at a bucket that no longer exists would violate that FK the moment
+        // the bucket delete below runs. MemoryVersion cascades off Memory, so no separate cleanup.
+        await prisma.memory.deleteMany({ where: { bucketId } });
+        // Files cascade with the bucket regardless, but deleting them explicitly here keeps this
+        // branch symmetric with move-to-default and makes the "delete-contents" audit record
+        // accurate about what was actually removed, not just what happened to cascade.
+        await prisma.file.deleteMany({ where: { bucketId } });
+      }
     }
 
     await prisma.bucket.delete({ where: { id: bucketId } });

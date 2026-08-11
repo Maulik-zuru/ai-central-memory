@@ -35,18 +35,26 @@ describe('Duplicate detection (US-MEM-06)', () => {
     const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
     const userId = account.body.account.id as string;
 
-    await createMemory(token, 'Dana prefers code reviews as questions.');
-    await createMemory(token, 'Dana prefers code reviews as questions');
+    const keepId = await createMemory(token, 'Dana prefers code reviews as questions.');
+    const mergeId = await createMemory(token, 'Dana prefers code reviews as questions');
 
     const suggestion = await waitForSuggestion(userId, 'duplicate');
     const approve = await request(app)
       .post(`/api/suggestions/${suggestion.id}/approve`)
       .set('Authorization', `Bearer ${token}`);
     expect(approve.status).toBe(200);
+    const survivorId = approve.body.suggestion?.memoryIdA ?? keepId;
 
     const list = await request(app).get('/api/memories').set('Authorization', `Bearer ${token}`);
     expect(list.body.items).toHaveLength(1);
     expect(list.body.items[0].content).toContain('Dana prefers code reviews as questions');
+
+    // The absorbed memory keeps its own identity — a mergedIntoId trail, not just gone.
+    const absorbedId = survivorId === keepId ? mergeId : keepId;
+    const absorbed = await request(app).get(`/api/memories/${absorbedId}`).set('Authorization', `Bearer ${token}`);
+    expect(absorbed.status).toBe(200);
+    expect(absorbed.body.memory.status).toBe('merged');
+    expect(absorbed.body.memory.mergedIntoId).toBe(survivorId);
   });
 
   it('dismissing a duplicate suggestion leaves both memories separate and never re-flags the pair', async () => {

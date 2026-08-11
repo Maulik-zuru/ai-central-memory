@@ -1,17 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
 import { Search, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { CreateMemoryDialog } from "@/components/memory/create-memory-dialog";
 import { MemoryRow } from "@/components/memory/memory-row";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { Brain } from "lucide-react";
+
+const PAGE_SIZE = 50;
 
 export default function MemoriesPage() {
   const [q, setQ] = useState("");
@@ -21,11 +24,17 @@ export default function MemoriesPage() {
   const buckets = useQuery({ queryKey: ["buckets"], queryFn: api.buckets });
   const activeBucket = buckets.data?.buckets.find((b) => b.id === bucketId);
 
-  const memories = useQuery({
+  // US-MEM-09 AC: "list view remains responsive (virtualized/paginated) past 1,000 memories" — the
+  // API has always paginated via cursor; this page previously called it with a fixed limit and no
+  // way to reach a second page, so a user with 1,000 memories could only ever see the first 50.
+  const memories = useInfiniteQuery({
     queryKey: ["memories", { q, bucketId }],
-    queryFn: () => api.memories({ q: q || undefined, limit: 50, bucketId }),
+    queryFn: ({ pageParam }) => api.memories({ q: q || undefined, limit: PAGE_SIZE, bucketId, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     placeholderData: (prev) => prev,
   });
+  const memoryItems = useMemo(() => memories.data?.pages.flatMap((p) => p.items) ?? [], [memories.data]);
 
   const suggestions = useQuery({ queryKey: ["suggestions"], queryFn: api.suggestions });
   const pendingCount = suggestions.data?.suggestions.length ?? 0;
@@ -57,7 +66,7 @@ export default function MemoriesPage() {
         </div>
       </div>
 
-      {memories.data && memories.data.items.length === 0 ? (
+      {memories.data && memoryItems.length === 0 ? (
         <EmptyState
           icon={Brain}
           title={q ? "No memories match that search" : "Your memory notebook lives here"}
@@ -68,9 +77,21 @@ export default function MemoriesPage() {
           }
         />
       ) : (
-        <div className="rounded-xl border border-border bg-card px-5 shadow-[var(--shadow-card)]">
-          {memories.data?.items.map((memory) => <MemoryRow key={memory.id} memory={memory} />)}
-        </div>
+        <>
+          <div className="rounded-xl border border-border bg-card px-5 shadow-[var(--shadow-card)]">
+            {memoryItems.map((memory) => <MemoryRow key={memory.id} memory={memory} />)}
+          </div>
+          {memories.hasNextPage && (
+            <Button
+              variant="outline"
+              className="self-center"
+              disabled={memories.isFetchingNextPage}
+              onClick={() => memories.fetchNextPage()}
+            >
+              {memories.isFetchingNextPage ? "Loading…" : "Load more"}
+            </Button>
+          )}
+        </>
       )}
     </div>
   );

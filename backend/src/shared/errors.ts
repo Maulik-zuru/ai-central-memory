@@ -1,16 +1,18 @@
 export class AppError extends Error {
   readonly statusCode: number;
   readonly code: string;
+  readonly details?: Record<string, unknown>;
 
-  constructor(statusCode: number, code: string, message: string) {
+  constructor(statusCode: number, code: string, message: string, details?: Record<string, unknown>) {
     super(message);
     this.statusCode = statusCode;
     this.code = code;
+    this.details = details;
     this.name = 'AppError';
   }
 
-  static badRequest(message: string, code = 'BAD_REQUEST') {
-    return new AppError(400, code, message);
+  static badRequest(message: string, code = 'BAD_REQUEST', details?: Record<string, unknown>) {
+    return new AppError(400, code, message, details);
   }
 
   static unauthorized(message = 'Unauthorized', code = 'UNAUTHORIZED') {

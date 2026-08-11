@@ -3,6 +3,7 @@ import { AppError } from '../../shared/errors';
 import { logger } from '../../shared/logger';
 import { getStorageProvider } from '../../shared/providers/storage.provider';
 import { getJobRunner } from '../../shared/providers/job-runner.provider';
+import { getEmailProvider } from '../../shared/providers/email.provider';
 import { complianceService } from './compliance.service';
 
 // US-ACC-05's AC: "link expires after a reasonable window." Seven days matches the trial/refund
@@ -148,6 +149,24 @@ export const exportService = {
         requestedAt,
         outcome: 'completed',
       });
+
+      // US-ACC-05 AC: "user receives a completion notification with a download link" — the
+      // dashboard's in-flight polling covers a user who stays on the page, but not one who closed
+      // the tab, which was the entire gap this call closes. Best-effort: a failed send here must
+      // not flip a successfully-completed export back to "failed" — the archive is real and
+      // downloadable either way, so the failure is only logged, not surfaced to the export record.
+      const dashboardOrigin = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
+      await getEmailProvider()
+        .send({
+          to: archive.account.email,
+          subject: 'Your data export is ready',
+          html: `<p>Your requested data export has finished processing.</p>
+                 <p><a href="${dashboardOrigin}/dashboard/settings/privacy">Download it from your dashboard</a> —
+                 this link expires in 7 days.</p>`,
+        })
+        .catch((err) => {
+          logger.error({ err, requestId }, 'Export completion email failed to send');
+        });
     } catch (err) {
       logger.error({ err, requestId }, 'Data export failed');
       await prisma.dataExportRequest.updateMany({

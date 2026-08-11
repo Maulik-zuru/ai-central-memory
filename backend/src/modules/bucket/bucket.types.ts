@@ -13,6 +13,13 @@ export const moveBucketSchema = z.object({
   parentId: z.string().nullable(),
 });
 
+// US-ORG-01: deleting a non-empty bucket must ask, not silently pick one. Omitted entirely when
+// the bucket has no memories — the strategy question only makes sense once there's something to
+// decide about.
+export const deleteBucketSchema = z.object({
+  strategy: z.enum(['move-to-default', 'delete-contents']).optional(),
+});
+
 export const inviteSchema = z.object({
   email: z.string().email(),
   role: z.enum(['editor', 'viewer']),

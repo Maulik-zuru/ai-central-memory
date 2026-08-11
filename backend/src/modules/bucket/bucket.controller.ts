@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { AppError } from '../../shared/errors';
 import { bucketService } from './bucket.service';
-import { createBucketSchema, renameBucketSchema, moveBucketSchema } from './bucket.types';
+import { createBucketSchema, renameBucketSchema, moveBucketSchema, deleteBucketSchema } from './bucket.types';
 
 function requireAuth(req: Request) {
   if (!req.auth) throw AppError.unauthorized();
@@ -40,7 +40,8 @@ export const bucketController = {
 
   async remove(req: Request, res: Response) {
     const { userId } = requireAuth(req);
-    await bucketService.delete(userId, req.params.bucketId);
+    const { strategy } = deleteBucketSchema.parse(req.body ?? {});
+    await bucketService.delete(userId, req.params.bucketId, strategy);
     res.status(204).send();
   },
 };

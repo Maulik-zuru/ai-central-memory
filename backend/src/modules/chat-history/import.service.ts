@@ -73,7 +73,7 @@ export const importService = {
     buffer: Buffer,
   ): Promise<{ conversationsQueued: number }> {
     await requireBucketMembership(userId, bucketId, 'editor');
-    await historyLimitService.assertWithinLimit(userId);
+    await historyLimitService.assertWithinLimit(userId, platform);
 
     const provider = getConversationImportProvider(platform);
     if (!provider) {

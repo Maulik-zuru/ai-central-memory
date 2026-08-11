@@ -177,10 +177,19 @@ model Memory {
   // Phase 9: knowledge graph extraction marker — same lifecycle shape as embedding/categoryId.
   graphProcessedAt DateTime?
   graphEdges KnowledgeGraphEdge[]
+  // Phase 14: the absorbed side of a merge keeps a pointer to its survivor instead of losing its
+  // own identity outright — status still flips to "merged" (excluded from retrieval the same way),
+  // but "what happened to this fact" stays answerable. SetNull rather than Cascade: if the
+  // survivor itself is later hard-deleted, the absorbed memory's row (and its version history)
+  // should still exist, just pointing at nothing.
+  mergedIntoId String?
+  mergedInto   Memory?                     @relation("MemoryMergedInto", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedFrom   Memory[]                    @relation("MemoryMergedInto")
 
   @@index([userId, status])
   @@index([bucketId])
   @@index([categoryId])
+  @@index([mergedIntoId])
 }
 
 model MemoryVersion {

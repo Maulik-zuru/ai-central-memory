@@ -120,6 +120,21 @@ export const askService = {
     if (params.conversationId) {
       conversation = await prisma.askConversation.findUnique({ where: { id: params.conversationId } });
       if (!conversation || conversation.userId !== userId) throw AppError.notFound('Ask conversation not found');
+
+      // US-ASK-02 (revised, MemoryPlugin_Clone_Spec.md §5.5): mode locks the moment a thread has
+      // its first message — a new source needs a new conversation, not a mode-switch mid-thread.
+      // The thread's own first user message is the source of truth, not whatever the client
+      // remembers requesting the thread with.
+      const firstMessage = await prisma.askMessage.findFirst({
+        where: { conversationId: conversation.id, role: 'user' },
+        orderBy: { position: 'asc' },
+      });
+      if (firstMessage?.mode && firstMessage.mode !== params.mode) {
+        throw AppError.badRequest(
+          `This conversation was started in "${firstMessage.mode}" mode and can't switch to "${params.mode}". Start a new conversation to ask in a different mode.`,
+          'ASK_MODE_LOCKED',
+        );
+      }
     } else {
       if (params.bucketId) await requireBucketMembership(userId, params.bucketId, 'viewer');
       conversation = await prisma.askConversation.create({
