@@ -2,9 +2,15 @@ import crypto from 'crypto';
 import { prisma } from '../../shared/prisma';
 import { AppError } from '../../shared/errors';
 import { requireBucketMembership } from '../../shared/bucketAccess';
-import { getConversationImportProvider, type ParsedConversation } from '../../shared/providers/chat-import.provider';
+import { getConversationImportProvider, type ParsedConversation, type ParsedMessage } from '../../shared/providers/chat-import.provider';
+import { tokenCount } from '../../shared/tokenizer';
 import { historyLimitService } from './history-limit.service';
 import { syncService } from './sync.service';
+
+// MemoryPlugin_Clone_Spec.md §6: `/api/chat-history/ingest/custom-online` caps a single
+// conversation at 100,000 tokens — the payload-size cap (50MB) is enforced separately, at the
+// body-parser level (see app.ts), since that's a transport concern, not a domain one.
+const MAX_INGEST_TOKENS = 100_000;
 
 function contentHash(platform: string, parsed: ParsedConversation): string {
   // Fallback idempotency key when the export has no platform id (Phase5_Implementation_Plan.md
@@ -103,5 +109,41 @@ export const importService = {
     }
 
     return { conversationsQueued: conversationIds.length };
+  },
+
+  /**
+   * Phase 15 (US-INT-06): programmatic JSON ingest — the direct-API path any external tool can
+   * push a conversation through, distinct from the file-upload path above but sharing its exact
+   * upsert-by-`externalId` dedup key (`upsertConversation`), so the same conversation pushed twice
+   * — whether by file or by this endpoint — never duplicates (MemoryPlugin_Clone_Spec.md §5.4's
+   * "duplicate-safe" requirement applies identically to both ingestion paths, not just file import).
+   */
+  async ingestCustomOnline(
+    userId: string,
+    bucketId: string,
+    platform: string,
+    conversation: { externalId: string; title: string; messages: ParsedMessage[] },
+  ): Promise<{ status: 'queued' }> {
+    await requireBucketMembership(userId, bucketId, 'editor');
+    await historyLimitService.assertWithinLimit(userId, platform);
+
+    const totalTokens = conversation.messages.reduce((sum, m) => sum + tokenCount(m.content), 0);
+    if (totalTokens > MAX_INGEST_TOKENS) {
+      throw AppError.badRequest(
+        `This conversation is ${totalTokens} tokens, over the ${MAX_INGEST_TOKENS}-token ingest limit.`,
+        'INGEST_TOO_LARGE',
+      );
+    }
+
+    const saved = await upsertConversation(userId, bucketId, platform, {
+      externalId: conversation.externalId,
+      title: conversation.title,
+      messages: conversation.messages,
+    });
+
+    // Same fire-and-forget shape as importFile() above — the caller gets `{status: 'queued'}`
+    // immediately, chunking/embedding happens after the response.
+    void syncService.processConversation(saved.id);
+    return { status: 'queued' };
   },
 };

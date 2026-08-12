@@ -12,7 +12,7 @@ import { UPLOAD_DIR } from './shared/providers/storage.provider';
 import { authRouter } from './modules/auth/auth.routes';
 import { apiKeyRouter } from './modules/apikey/apikey.routes';
 import { accountRouter } from './modules/account/account.routes';
-import { memoryRouter } from './modules/memory/memory.routes';
+import { memoryRouter, memoryV2Router } from './modules/memory/memory.routes';
 import { suggestionRouter } from './modules/suggestion/suggestion.routes';
 import { captureRouter } from './modules/memory/capture.routes';
 import { bucketRouter } from './modules/bucket/bucket.routes';
@@ -27,6 +27,7 @@ import { desktopRouter } from './modules/desktop/desktop.routes';
 import { intelligenceRouter } from './modules/intelligence/intelligence.routes';
 import { billingRouter } from './modules/billing/billing.routes';
 import { opsRouter } from './modules/ops/ops.routes';
+import { openApiRouter } from './modules/openapi/openapi.routes';
 
 export function createApp() {
   const app = express();
@@ -46,6 +47,15 @@ export function createApp() {
       redact: ['req.headers.authorization', 'req.headers.cookie'],
     }),
   );
+
+  // Phase 15 (US-INT-06): the programmatic chat-history ingest endpoint carries a whole
+  // conversation as a JSON body (spec cap: 50MB) — comfortably over the 100kb every other JSON
+  // endpoint needs. A path-scoped parser registered ahead of the global one below claims the body
+  // for this one route; body-parser sets `req._body` once it succeeds, so the global parser that
+  // runs next sees that flag and skips re-reading the (already-consumed) stream rather than
+  // erroring. Raising the global limit itself would be the wrong fix — every other endpoint would
+  // then accept payloads two orders of magnitude larger than it ever needs to.
+  app.use('/api/chat-history/ingest/custom-online', express.json({ limit: '50mb' }));
 
   // 100kb comfortably covers auth/account/api-key payloads; a real upload surface (Files, Phase 6)
   // gets its own dedicated limit rather than raising this one globally.
@@ -72,6 +82,7 @@ export function createApp() {
   app.use('/api/keys', apiKeyRouter);
   app.use('/api/account', accountRouter);
   app.use('/api/memories', memoryRouter);
+  app.use('/api/v2/memory', memoryV2Router);
   app.use('/api/suggestions', suggestionRouter);
   app.use('/api/capture', captureRouter);
   app.use('/api/buckets', bucketRouter);
@@ -86,6 +97,7 @@ export function createApp() {
   app.use('/api/intelligence', intelligenceRouter);
   app.use('/api/billing', billingRouter);
   app.use('/api/ops', opsRouter);
+  app.use('/api', openApiRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

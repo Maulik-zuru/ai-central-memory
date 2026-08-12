@@ -42,6 +42,21 @@ async function requireAccess(userId: string, id: string, minRole: BucketRole) {
   return memory;
 }
 
+// Phase 15: the public API accepts a bucket by name as an alternative to its ID (this codebase
+// doesn't enforce bucket-name uniqueness today — see docs/adr/0002 for the related, still-open
+// bucket-type-discriminator gap — so "first match, oldest first" is a documented, deliberate
+// choice here, not a silent assumption).
+async function resolveBucketIdByName(userId: string, bucketName: string): Promise<string> {
+  const memberships = await prisma.bucketMember.findMany({
+    where: { userId, role: { in: ['editor', 'owner'] } },
+    include: { bucket: true },
+    orderBy: { bucket: { createdAt: 'asc' } },
+  });
+  const match = memberships.find((m) => m.bucket.name.toLowerCase() === bucketName.toLowerCase());
+  if (!match) throw AppError.notFound(`No editable bucket named "${bucketName}"`, 'BUCKET_NOT_FOUND');
+  return match.bucketId;
+}
+
 export const memoryService = {
   async create(userId: string, content: string, source: 'manual' | 'one_click' | 'auto' = 'manual', bucketId?: string) {
     const targetBucketId = bucketId
@@ -114,7 +129,7 @@ export const memoryService = {
     return this.create(userId, content, 'one_click');
   },
 
-  async list(userId: string, opts: { cursor?: string; limit: number; q?: string; bucketId?: string }) {
+  async list(userId: string, opts: { cursor?: string; limit: number; q?: string; bucketId?: string; type?: 'text' | 'image' }) {
     const bucketIds = opts.bucketId
       ? [(await requireBucketMembership(userId, opts.bucketId, 'viewer')).bucketId]
       : await accessibleBucketIds(userId);
@@ -123,6 +138,7 @@ export const memoryService = {
       bucketId: { in: bucketIds },
       status: 'active',
       ...(opts.q ? { content: { contains: opts.q, mode: 'insensitive' as const } } : {}),
+      ...(opts.type ? { type: opts.type } : {}),
     };
 
     const rows = await prisma.memory.findMany({
@@ -172,6 +188,77 @@ export const memoryService = {
     const updated = await prisma.memory.update({ where: { id }, data: { bucketId } });
     await auditService.record(userId, 'memory.move', { type: 'Memory', id });
     return toPublic(updated);
+  },
+
+  /** Shared by the single-memory and bulk branches of the v2 update endpoint — one place that
+   * decides what a caller-supplied `{bucketId}` or `{bucketName}` actually resolves to. */
+  async resolveBucketId(userId: string, target: { bucketId?: string; bucketName?: string }): Promise<string> {
+    if (target.bucketId) {
+      return (await requireBucketMembership(userId, target.bucketId, 'editor')).bucketId;
+    }
+    return resolveBucketIdByName(userId, target.bucketName!);
+  },
+
+  /**
+   * Phase 15 (US-INT-06, MemoryPlugin_Clone_Spec.md §6): bulk move, and genuinely all-or-nothing —
+   * every requested ID is resolved and access-checked BEFORE any write happens, so a batch with one
+   * bad ID moves zero memories, not 99 of 100. Mirrors `US-ACC-06`'s account-deletion cascade in
+   * spirit: validate everything first, only then touch the database.
+   */
+  async bulkMove(
+    userId: string,
+    memoryIds: string[],
+    target: { bucketId?: string; bucketName?: string },
+  ): Promise<{ movedCount: number }> {
+    const targetBucketId = await this.resolveBucketId(userId, target);
+
+    const accessible = await prisma.bucketMember.findMany({
+      where: { userId, role: { in: ['editor', 'owner'] } },
+      select: { bucketId: true },
+    });
+    const editableBucketIds = new Set(accessible.map((m) => m.bucketId));
+
+    const found = await prisma.memory.findMany({
+      where: { id: { in: memoryIds } },
+      select: { id: true, bucketId: true, status: true },
+    });
+    const byId = new Map(found.map((m) => [m.id, m]));
+
+    const rejectedIds = memoryIds.filter((id) => {
+      const memory = byId.get(id);
+      return !memory || memory.status === 'deleted' || !editableBucketIds.has(memory.bucketId);
+    });
+
+    if (rejectedIds.length > 0) {
+      throw AppError.notFound(
+        `${rejectedIds.length} of ${memoryIds.length} memories could not be resolved or aren't editable by you — nothing was moved.`,
+        'MEMORIES_NOT_FOUND',
+        { rejectedIds },
+      );
+    }
+
+    await prisma.memory.updateMany({ where: { id: { in: memoryIds } }, data: { bucketId: targetBucketId } });
+    await auditService.record(userId, 'memory.bulkMove', { type: 'Bucket', id: targetBucketId });
+    return { movedCount: memoryIds.length };
+  },
+
+  /**
+   * Deliberately NOT all-or-nothing (contrast with bulkMove above) — a destructive action where
+   * one inaccessible ID shouldn't block deleting the rest the caller does own
+   * (MemoryPlugin_Clone_Spec.md §6: "response reports deleted/failed counts").
+   */
+  async bulkDelete(userId: string, memoryIds: string[]): Promise<{ deleted: number; failed: string[] }> {
+    const failed: string[] = [];
+    let deleted = 0;
+    for (const id of memoryIds) {
+      try {
+        await this.delete(userId, id);
+        deleted++;
+      } catch {
+        failed.push(id);
+      }
+    }
+    return { deleted, failed };
   },
 
   async merge(userId: string, keepId: string, mergeId: string) {

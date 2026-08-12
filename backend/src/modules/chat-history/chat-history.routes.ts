@@ -24,3 +24,7 @@ chatHistoryRouter.post('/search', optionalBucketRole('viewer'), asyncHandler(cha
 chatHistoryRouter.get('/usage', asyncHandler(chatHistoryController.usage));
 // Retrofit (docs/Phase10_Implementation_Plan.md §3): monthly insights are Pro-only.
 chatHistoryRouter.get('/insights', requirePlan('pro'), asyncHandler(chatHistoryController.insights));
+// Phase 15 (US-INT-06): the JSON body for this route is claimed by a 50MB-limit parser mounted
+// ahead of the global 100kb one in app.ts — see that file's comment for why.
+chatHistoryRouter.post('/ingest/custom-online', asyncHandler(chatHistoryController.ingestCustomOnline));
+chatHistoryRouter.delete('/chats', asyncHandler(chatHistoryController.deleteConversations));

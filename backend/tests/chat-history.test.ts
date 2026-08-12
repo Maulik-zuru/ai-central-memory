@@ -359,3 +359,89 @@ describe('Chat History Archive — limits and insights (US-ARC-06, US-ARC-08)', 
     expect(insight?.summary).toBeNull();
   });
 });
+
+describe('Programmatic ingest and delete (US-INT-06)', () => {
+  beforeEach(resetDb);
+  afterAll(disconnect);
+
+  it('upserts by conversation.id — pushing the same id twice updates in place, never duplicates', async () => {
+    const { token, bucketId } = await seedAccount('ingest-a@example.com');
+
+    const body = {
+      bucketId,
+      platform: 'custom-tool',
+      conversation: {
+        id: 'ext-123',
+        title: 'First push',
+        messages: [{ role: 'user', content: 'hello there' }],
+      },
+    };
+
+    const first = await request(app).post('/api/chat-history/ingest/custom-online').set('Authorization', `Bearer ${token}`).send(body);
+    expect(first.status).toBe(202);
+    expect(first.body.status).toBe('queued');
+
+    const second = await request(app)
+      .post('/api/chat-history/ingest/custom-online')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ...body, conversation: { ...body.conversation, title: 'Updated on second push' } });
+    expect(second.status).toBe(202);
+
+    const list = await request(app).get('/api/chat-history/conversations').set('Authorization', `Bearer ${token}`).query({ bucketId });
+    expect(list.body.items).toHaveLength(1);
+    expect(list.body.items[0].title).toBe('Updated on second push');
+  });
+
+  it('rejects a conversation over the 100,000-token ingest limit', async () => {
+    const { token, bucketId } = await seedAccount('ingest-b@example.com');
+    const hugeMessage = 'word '.repeat(150_000); // comfortably over 100k tokens
+
+    const res = await request(app)
+      .post('/api/chat-history/ingest/custom-online')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        bucketId,
+        platform: 'custom-tool',
+        conversation: { id: 'huge-1', title: 'Too big', messages: [{ role: 'user', content: hugeMessage }] },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INGEST_TOO_LARGE');
+  });
+
+  it('deletes conversations irreversibly, reporting per-id success and failure', async () => {
+    const { token, bucketId } = await seedAccount('delete-a@example.com');
+    const { token: outsiderToken } = await seedAccount('delete-outsider@example.com');
+
+    const mine = await importAndWait(
+      token,
+      bucketId,
+      'chatgpt',
+      chatGptExport([{ role: 'user', text: 'delete me', epochSec: 1700000000 }]),
+      1,
+    );
+    const notMineConversation = await importAndWait(
+      outsiderToken,
+      (await request(app).get('/api/buckets').set('Authorization', `Bearer ${outsiderToken}`)).body.buckets[0].id,
+      'chatgpt',
+      chatGptExport([{ role: 'user', text: 'not yours', epochSec: 1700000000 }]),
+      1,
+    );
+
+    const res = await request(app)
+      .delete('/api/chat-history/chats')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: [mine!.id, notMineConversation!.id, 'nonexistent-id'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(1);
+    expect(res.body.failed).toEqual(expect.arrayContaining([notMineConversation!.id, 'nonexistent-id']));
+
+    const gone = await prisma.conversation.findUnique({ where: { id: mine!.id } });
+    expect(gone).toBeNull();
+    // A future sync/import of the exact same external conversation is free to recreate it — this
+    // is Delete, not the still-unbuilt Exclude, so there is deliberately no placeholder left behind.
+    const stillThere = await prisma.conversation.findUnique({ where: { id: notMineConversation!.id } });
+    expect(stillThere).not.toBeNull();
+  });
+});
