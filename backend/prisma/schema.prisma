@@ -45,6 +45,8 @@ model User {
   usageAnalyticsSummaries UsageAnalyticsSummary[]
   payments Payment[]
   dataExportRequests DataExportRequest[]
+  mcpAuthorizationCodes McpAuthorizationCode[]
+  mcpTokens McpToken[]
 }
 
 model Session {
@@ -546,4 +548,109 @@ model ComplianceLog {
   outcome           String // "completed" | "failed"
 
   @@index([userId])
+}
+
+// --- Phase 16 (US-INT-03b): remote MCP — OAuth 2.0 + PKCE + Dynamic Client Registration --------
+// See docs/MemoryPlugin_Parity_Implementation_Plan.md Phase 16 and mcp.oauth.provider.ts, which
+// implements the SDK's `OAuthServerProvider` interface against these four models. No relation to
+// the SDK's own types here — this is a completely ordinary OAuth authorization-server schema; the
+// SDK only cares that the provider's methods return the right shapes.
+
+// A client the SDK's Dynamic Client Registration handler creates on first connect — no relation
+// to User, because a client (e.g. "Claude Desktop") is shared across every account that connects
+// it, not owned by one.
+model McpClient {
+  id                      String    @id @default(cuid()) // == OAuth client_id
+  clientSecretHash        String? // null for a public client (PKCE-only, auth method "none")
+  clientName              String?
+  redirectUris            String[]
+  tokenEndpointAuthMethod String    @default("none")
+  grantTypes              String[]  @default(["authorization_code", "refresh_token"])
+  scope                   String?
+  createdAt               DateTime  @default(now())
+  clientSecretExpiresAt   DateTime? // null = never expires
+
+  authorizationRequests McpAuthorizationRequest[]
+  authorizationCodes    McpAuthorizationCode[]
+  tokens                McpToken[]
+}
+
+// A pending authorize() call, created the moment an MCP client redirects the user's browser to
+// /authorize, before we know which MemoryOS account (if any) is doing the approving — that's why
+// this has no userId yet; McpAuthorizationCode is the row that gains one, once a real user
+// approves via the dashboard consent screen this request id gets rendered on.
+model McpAuthorizationRequest {
+  id            String    @id @default(cuid())
+  clientId      String
+  client        McpClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  redirectUri   String
+  codeChallenge String
+  scopes        String[]
+  state         String?
+  resource      String?
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  // Set once the pending request has been turned into a code (or explicitly denied), so it can
+  // never be approved a second time via a replayed link to the same consent page.
+  resolvedAt    DateTime?
+
+  @@index([clientId])
+}
+
+// Issued only after a logged-in user approves an McpAuthorizationRequest. Single-use — consumedAt
+// is set the moment exchangeAuthorizationCode() succeeds, and a second exchange attempt with the
+// same code is rejected (RFC 6749 §10.5's replay-prevention requirement).
+model McpAuthorizationCode {
+  code          String    @id @default(cuid())
+  clientId      String
+  client        McpClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  redirectUri   String
+  codeChallenge String
+  scopes        String[]
+  resource      String?
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  consumedAt    DateTime?
+
+  @@index([clientId])
+  @@index([userId])
+}
+
+// Access + refresh tokens are stored hashed (same discipline as ApiKey — Phase 1) so a database
+// read alone never yields a usable credential. Refresh rotates in place (a new row is NOT created
+// on refresh; the same row's accessTokenHash/refreshTokenHash/expiry are overwritten) so a stolen,
+// already-rotated refresh token silently stops working the moment the legitimate client refreshes.
+model McpToken {
+  id                   String    @id @default(cuid())
+  clientId             String
+  client               McpClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId               String
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessTokenHash      String    @unique
+  refreshTokenHash     String?   @unique
+  scopes               String[]
+  resource             String?
+  accessTokenExpiresAt DateTime
+  createdAt            DateTime  @default(now())
+  revokedAt            DateTime?
+
+  @@index([clientId])
+  @@index([userId])
+}
+
+// Backs the `export_conversation` MCP tool specifically — deliberately NOT the same model
+// `DataExportRequest` (compliance.export.service.ts) uses for whole-account exports. That flow's
+// download route is ownership-gated (authenticate + requireScope) because the caller is the
+// dashboard user themselves; this one is a short-lived (15-minute) capability URL an MCP client
+// can hand to a human with no further auth, the same signed-URL-with-no-static-secret pattern
+// image memories use — unguessable id + short TTL, not a session check, is the security boundary.
+// Mixing the two into one ownership-checked model would either weaken that check or break the
+// account-export flow; a second small model keeps both invariants intact.
+model McpConversationExport {
+  id         String   @id @default(cuid())
+  downloadKey String
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
 }

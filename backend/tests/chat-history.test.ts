@@ -7,6 +7,11 @@ import { insightService } from '../src/modules/chat-history/insight.service';
 
 const app = createApp();
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 async function seedAccount(email: string) {
   const token = await registerAndGetToken(app, email);
   const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
@@ -55,7 +60,6 @@ async function importAndWait(token: string, bucketId: string, platform: string, 
 
 describe('Chat History Archive — import (US-ARC-01, US-ARC-02)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('imports a ChatGPT export into a conversation with linearized messages', async () => {
     const { token, bucketId } = await seedAccount('archive-a@example.com');
@@ -128,7 +132,6 @@ describe('Chat History Archive — import (US-ARC-01, US-ARC-02)', () => {
 
 describe('Chat History Archive — resumable sync (US-ARC-02)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('resumes processing from syncCursor instead of reprocessing earlier messages', async () => {
     const { token, bucketId } = await seedAccount('resume-a@example.com');
@@ -168,7 +171,6 @@ describe('Chat History Archive — resumable sync (US-ARC-02)', () => {
 
 describe('Chat History Archive — semantic search (US-ARC-03, US-ARC-07)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('finds a relevant conversation with no exact keyword overlap, ranked above an unrelated one', async () => {
     const { token, bucketId } = await seedAccount('search-a@example.com');
@@ -263,7 +265,6 @@ describe('Chat History Archive — semantic search (US-ARC-03, US-ARC-07)', () =
 
 describe('Chat History Archive — limits and insights (US-ARC-06, US-ARC-08)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('blocks a Core-plan user at the conversation limit and allows Pro past it', async () => {
     const { token, userId, bucketId } = await seedAccount('limits-a@example.com');
@@ -362,7 +363,6 @@ describe('Chat History Archive — limits and insights (US-ARC-06, US-ARC-08)', 
 
 describe('Programmatic ingest and delete (US-INT-06)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('upserts by conversation.id — pushing the same id twice updates in place, never duplicates', async () => {
     const { token, bucketId } = await seedAccount('ingest-a@example.com');

@@ -28,6 +28,7 @@ import { intelligenceRouter } from './modules/intelligence/intelligence.routes';
 import { billingRouter } from './modules/billing/billing.routes';
 import { opsRouter } from './modules/ops/ops.routes';
 import { openApiRouter } from './modules/openapi/openapi.routes';
+import { mcpOAuthAppRouter, mcpRouter } from './modules/mcp/mcp.routes';
 
 export function createApp() {
   const app = express();
@@ -98,6 +99,13 @@ export function createApp() {
   app.use('/api/billing', billingRouter);
   app.use('/api/ops', opsRouter);
   app.use('/api', openApiRouter);
+
+  // Phase 16 (US-INT-03b): the SDK's mcpAuthRouter MUST be mounted at the application root (its
+  // own router.d.ts says so — OAuth discovery paths like /.well-known/oauth-authorization-server
+  // are root-relative, not nested). mcpRouter is everything else MCP-specific, deliberately kept
+  // under /api/mcp like every other module.
+  app.use(mcpOAuthAppRouter);
+  app.use('/api/mcp', mcpRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -1,0 +1,27 @@
+{
+  "name": "ai-memory-mcp-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI Memory & Context Platform — local MCP server (stdio, static API-key auth)",
+  "main": "dist/index.js",
+  "bin": {
+    "ai-memory-mcp-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "test": "jest --runInBand"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.2",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.2"
+  }
+}

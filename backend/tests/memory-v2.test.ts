@@ -4,6 +4,11 @@ import { disconnect, registerAndGetToken, resetDb } from './testUtils';
 
 const app = createApp();
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 async function seedAccount(email: string) {
   const token = await registerAndGetToken(app, email);
   const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
@@ -18,7 +23,6 @@ async function createMemory(token: string, content: string, bucketId?: string) {
 
 describe('Bulk memory operations (US-INT-06)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('bulk-deletes accessible memories and reports failures for the rest, without aborting the batch', async () => {
     const { token } = await seedAccount('turing-bulk@example.com');
@@ -48,7 +52,6 @@ describe('Bulk memory operations (US-INT-06)', () => {
 
 describe('Versioned memory API — GET/POST /api/v2/memory (US-INT-06)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('returns memories and buckets in one call, filterable by bucket and content type', async () => {
     const { token, bucketId } = await seedAccount('lovelace-v2@example.com');

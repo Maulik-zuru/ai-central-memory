@@ -3,9 +3,11 @@ import { AppError } from '../../shared/errors';
 import { auditService } from '../audit/audit.service';
 import { embeddingService } from './embedding.service';
 import { getStorageProvider } from '../../shared/providers/storage.provider';
+import { getLlmProvider } from '../../shared/providers/llm.provider';
 import { bucketService } from '../bucket/bucket.service';
 import { ROLE_RANK, accessibleBucketIds, type BucketRole } from '../../shared/bucketAccess';
 import { analyticsService } from '../intelligence/analytics.service';
+import { retrievalService } from '../context/retrieval.service';
 
 type MemoryRecord = Awaited<ReturnType<typeof prisma.memory.findFirstOrThrow>>;
 
@@ -154,6 +156,24 @@ export const memoryService = {
       items: page.map(toPublic),
       nextCursor: hasMore ? page[page.length - 1].id : null,
     };
+  },
+
+  // Phase 16 (US-INT-03a/b): the same semantic ranking the `memoryos_search_memories` MCP tool
+  // needs, pulled out here so both the remote (in-process) tool and this REST endpoint — which
+  // the local MCP server package calls, since it has no direct Prisma access — call one
+  // implementation rather than two independently-drifting copies of the same ranking logic.
+  async search(userId: string, opts: { query: string; bucketId?: string; limit: number }) {
+    const bucketIds = opts.bucketId
+      ? [(await requireBucketMembership(userId, opts.bucketId, 'viewer')).bucketId]
+      : await accessibleBucketIds(userId);
+
+    const provider = getLlmProvider();
+    const embedding = await provider.embed(opts.query);
+    const rows = await retrievalService.scoreCandidates(bucketIds, embedding);
+    const ranked = [...rows].sort((a, b) => a.distance - b.distance);
+
+    const hasMore = ranked.length > opts.limit;
+    return { items: hasMore ? ranked.slice(0, opts.limit) : ranked, hasMore };
   },
 
   async get(userId: string, id: string) {

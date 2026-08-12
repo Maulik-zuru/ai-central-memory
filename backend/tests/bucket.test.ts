@@ -6,6 +6,11 @@ import { stubOutbox, clearStubOutbox } from '../src/shared/providers/email.provi
 
 const app = createApp();
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 async function getUserId(token: string) {
   const res = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
   return res.body.account.id as string;
@@ -16,7 +21,6 @@ describe('Buckets (US-ORG-01, 02, 03)', () => {
     await resetDb();
     clearStubOutbox();
   });
-  afterAll(disconnect);
 
   it('creates a bucket and the creator gets an owner membership', async () => {
     const token = await registerAndGetToken(app, 'ada@example.com');
@@ -162,7 +166,6 @@ describe('Shared buckets (US-ORG-04)', () => {
     await resetDb();
     clearStubOutbox();
   });
-  afterAll(disconnect);
 
   async function setupSharedBucket(role: 'editor' | 'viewer') {
     const ownerToken = await registerAndGetToken(app, 'owner@example.com');

@@ -5,9 +5,13 @@ import { prisma } from '../src/shared/prisma';
 
 const app = createApp();
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 describe('Memory CRUD & versioning (US-MEM-01, 04, 08, 09)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('rejects empty content', async () => {
     const token = await registerAndGetToken(app, 'ada@example.com');
@@ -96,5 +100,58 @@ describe('Memory CRUD & versioning (US-MEM-01, 04, 08, 09)', () => {
 
     expect(seen.size).toBe(25);
     expect(pages).toBe(3);
+  });
+});
+
+describe('Memory search — GET /api/memories/search (US-INT-03a/b)', () => {
+  beforeEach(resetDb);
+
+  async function createMemoryWithEmbedding(token: string, content: string, bucketId?: string) {
+    const res = await request(app)
+      .post('/api/memories')
+      .set('Authorization', `Bearer ${token}`)
+      .send(bucketId ? { content, bucketId } : { content });
+    const id = res.body.memory.id as string;
+    await waitFor(async () => {
+      const rows = await prisma.$queryRaw<{ has_embedding: boolean }[]>`
+        SELECT embedding IS NOT NULL AS has_embedding FROM "Memory" WHERE id = ${id}
+      `;
+      return rows[0]?.has_embedding || undefined;
+    });
+    return id;
+  }
+
+  it('ranks a matching memory above an unrelated one', async () => {
+    const token = await registerAndGetToken(app, 'search-a@example.com');
+    const matchId = await createMemoryWithEmbedding(token, 'I go running every morning before work.');
+    await createMemoryWithEmbedding(token, 'My favorite recipe calls for saffron and slow-roasted lamb.');
+
+    const res = await request(app)
+      .get('/api/memories/search')
+      .query({ query: 'What is my running routine?' })
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.items[0].id).toBe(matchId);
+  });
+
+  it('403s a search scoped to a bucket the caller is not at least a viewer on', async () => {
+    const ownerToken = await registerAndGetToken(app, 'search-owner@example.com');
+    const outsiderToken = await registerAndGetToken(app, 'search-outsider@example.com');
+    const buckets = await request(app).get('/api/buckets').set('Authorization', `Bearer ${ownerToken}`);
+    const bucketId = buckets.body.buckets[0].id as string;
+
+    const res = await request(app)
+      .get('/api/memories/search')
+      .query({ query: 'anything', bucketId })
+      .set('Authorization', `Bearer ${outsiderToken}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects an empty query', async () => {
+    const token = await registerAndGetToken(app, 'search-empty@example.com');
+    const res = await request(app).get('/api/memories/search').query({ query: '' }).set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(400);
   });
 });

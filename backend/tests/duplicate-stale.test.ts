@@ -5,6 +5,11 @@ import { prisma } from '../src/shared/prisma';
 
 const app = createApp();
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 async function createMemory(token: string, content: string) {
   const res = await request(app).post('/api/memories').set('Authorization', `Bearer ${token}`).send({ content });
   return res.body.memory.id as string;
@@ -16,7 +21,6 @@ async function waitForSuggestion(userId: string, type: string) {
 
 describe('Duplicate detection (US-MEM-06)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('flags two near-identical memories as a duplicate suggestion without blocking either save', async () => {
     const token = await registerAndGetToken(app, 'ada@example.com');
@@ -82,7 +86,6 @@ describe('Duplicate detection (US-MEM-06)', () => {
 
 describe('Stale detection (US-MEM-07)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('flags the older memory as stale when a newer one contradicts it', async () => {
     const token = await registerAndGetToken(app, 'hopper@example.com');

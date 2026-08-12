@@ -7,6 +7,7 @@ import {
   createMemorySchema,
   listMemoriesSchema,
   mergeMemoriesSchema,
+  searchMemoriesSchema,
   updateMemorySchema,
   v2MemoryQuerySchema,
   v2MemoryUpdateSchema,
@@ -59,6 +60,15 @@ export const memoryController = {
     const { userId } = requireAuth(req);
     const memory = await memoryService.get(userId, req.params.id);
     res.status(200).json({ memory });
+  },
+
+  // Phase 16: semantic search backing `memoryos_search_memories` for callers with no direct
+  // Prisma access (the local MCP server package) — see memoryService.search()'s comment.
+  async search(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const query = searchMemoriesSchema.parse(req.query);
+    const result = await memoryService.search(userId, query);
+    res.status(200).json(result);
   },
 
   async update(req: Request, res: Response) {

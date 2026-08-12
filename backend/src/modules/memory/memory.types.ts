@@ -16,6 +16,12 @@ export const listMemoriesSchema = z.object({
   bucketId: z.string().optional(),
 });
 
+export const searchMemoriesSchema = z.object({
+  query: z.string().trim().min(1),
+  bucketId: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 export const mergeMemoriesSchema = z.object({
   keepId: z.string().min(1),
   mergeId: z.string().min(1),

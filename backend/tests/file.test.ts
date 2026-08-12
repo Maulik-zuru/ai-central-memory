@@ -7,6 +7,11 @@ import { getStorageProvider } from '../src/shared/providers/storage.provider';
 
 const app = createApp();
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 async function seedAccount(email: string) {
   const token = await registerAndGetToken(app, email);
   const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
@@ -25,7 +30,6 @@ async function uploadAndWait(token: string, bucketId: string, buffer: Buffer, fi
 
 describe('Files — upload & processing (US-FIL-01)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('rejects an unsupported file type before any File row is created', async () => {
     const { token, bucketId } = await seedAccount('file-a@example.com');
@@ -69,7 +73,6 @@ describe('Files — upload & processing (US-FIL-01)', () => {
 
 describe('Files — chunk/page integrity', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('never produces a chunk that spans two pages', async () => {
     const { token, bucketId } = await seedAccount('file-d@example.com');
@@ -93,7 +96,6 @@ describe('Files — chunk/page integrity', () => {
 
 describe('Files — Q&A with citations (US-FIL-03)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('answers with a citation pointing at the page that actually contains the match', async () => {
     const { token, bucketId } = await seedAccount('file-e@example.com');
@@ -155,7 +157,6 @@ describe('Files — Q&A with citations (US-FIL-03)', () => {
 
 describe('Files — search (US-FIL-04)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('matches on extracted content the filename does not contain', async () => {
     const { token, bucketId } = await seedAccount('file-g@example.com');
@@ -179,7 +180,6 @@ describe('Files — search (US-FIL-04)', () => {
 
 describe('Files — deletion cleanup', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('removes chunks and the underlying storage object when a file is deleted', async () => {
     const { token, bucketId } = await seedAccount('file-h@example.com');

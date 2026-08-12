@@ -24,6 +24,7 @@ memoryRouter.post('/image', upload.single('image'), asyncHandler(memoryControlle
 memoryRouter.post('/merge', asyncHandler(memoryController.merge));
 memoryRouter.post('/bulk-delete', asyncHandler(memoryController.bulkDelete));
 memoryRouter.get('/', asyncHandler(memoryController.list));
+memoryRouter.get('/search', asyncHandler(memoryController.search));
 memoryRouter.get('/:id', asyncHandler(memoryController.get));
 memoryRouter.patch('/:id', asyncHandler(memoryController.update));
 memoryRouter.patch('/:id/bucket', asyncHandler(memoryController.move));

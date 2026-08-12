@@ -177,6 +177,13 @@ export interface HistoryUsage {
   platforms: { platform: string; count: number }[];
 }
 
+// Phase 16 (US-INT-03b): what the MCP consent screen needs to render — which app is asking, for
+// what. Deliberately minimal; the OAuth mechanics (PKCE, redirect_uri, state) never surface here.
+export interface McpConsentInfo {
+  clientName: string;
+  scopes: string[];
+}
+
 export interface MonthlyInsight {
   month: string;
   summary: string | null;
@@ -451,6 +458,14 @@ export const api = {
 
   monthlyInsight: (month?: string): Promise<{ insight: MonthlyInsight }> =>
     apiRequest(`/api/chat-history/insights${month ? `?month=${month}` : ""}`),
+
+  mcpConsent: (requestId: string): Promise<McpConsentInfo> => apiRequest(`/api/mcp/consent/${requestId}`),
+
+  approveMcpConsent: (requestId: string): Promise<{ redirectUrl: string }> =>
+    apiRequest(`/api/mcp/consent/${requestId}/approve`, { method: "POST" }),
+
+  denyMcpConsent: (requestId: string): Promise<{ redirectUrl: string }> =>
+    apiRequest(`/api/mcp/consent/${requestId}/deny`, { method: "POST" }),
 
   uploadFile: (file: File, bucketId: string): Promise<{ file: FileRecord }> => {
     const form = new FormData();
