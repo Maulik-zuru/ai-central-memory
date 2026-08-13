@@ -23,6 +23,31 @@ export interface LlmProvider {
   ): Promise<{ answer: string; usedChunkIds: string[] }>;
   /** Extract named entities and the relations between them mentioned together in one text (Phase 9 US-ADV-02). */
   extractEntities(text: string): Promise<EntityExtractionResult>;
+  /**
+   * Phase 17 Stage 1 (US-ARC-07): rewrite a chat-history recall query into first-person "what I
+   * probably said back then" variants, plus any date bounds implied ("last week", "in March"),
+   * anchored to `now`. The verbatim original query is always present in `variants` — callers
+   * don't need to re-add it themselves.
+   */
+  expandQuery(query: string, now: Date): Promise<{ variants: string[]; dateFilter?: { after?: Date; before?: Date } }>;
+  /**
+   * Phase 17 Stage 4 (US-ARC-07): of the candidates that survived hybrid search + rerank, which
+   * ones actually answer the query — not just resemble it. Returns the relevant subset's ids
+   * (order not meaningful). This is the step the spec calls out as dominating recall latency.
+   */
+  assessChunkRelevance(query: string, candidates: { id: string; content: string }[]): Promise<string[]>;
+  /**
+   * Phase 17 Stage 6 (US-ARC-07, ADR-0005): fold the surviving, context-expanded chunks into one
+   * query-shaped summary within `tokenBudget`, citing which chunk ids it actually drew from.
+   * `priorSummary`, when set, is the running summary from an earlier fold pass over a prior batch
+   * (ADR-0005's map-reduce fold for conversations too large for one pass) — the orchestration of
+   * which batch goes in which call lives in the recall pipeline, not here.
+   */
+  summarizeWithCitations(
+    query: string,
+    chunks: { id: string; content: string }[],
+    opts: { tokenBudget: number; priorSummary?: string },
+  ): Promise<{ summary: string; citedIds: string[] }>;
 }
 
 export interface EntityExtractionResult {
@@ -114,6 +139,50 @@ function stubExtractEntities(text: string): EntityExtractionResult {
   return { entities, relations };
 }
 
+// Stub query expansion: without a real LLM there's no genuine paraphrasing to offer, so this is
+// honest about it (same bar stubAnswerWithContext sets) rather than faking variants — the
+// original query is always the sole variant. The "always re-add the original" contract is what
+// every caller actually depends on, and this trivially satisfies it.
+function stubExpandQuery(query: string): { variants: string[]; dateFilter?: { after?: Date; before?: Date } } {
+  return { variants: [query] };
+}
+
+// Stub relevance assessment: keyword-overlap with the query, same scoring shape stubRerank
+// already uses — enough to prove "the relevance filter actually drops candidates" end to end
+// without a network call. A candidate with zero shared non-trivial words is judged irrelevant.
+function stubAssessChunkRelevance(query: string, candidates: { id: string; content: string }[]): string[] {
+  const queryWords = new Set((query.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length >= 3));
+  return candidates
+    .filter((c) => {
+      const words = c.content.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+      return words.some((w) => queryWords.has(w));
+    })
+    .map((c) => c.id);
+}
+
+// Stub summarization-with-citations: no LLM configured, so — same honesty bar
+// stubAnswerWithContext sets — this folds the prior running summary (if any) and the chunks'
+// content verbatim up to a character-based approximation of the token budget, citing every chunk
+// actually included rather than pretending to synthesize prose from them.
+function stubSummarizeWithCitations(
+  chunks: { id: string; content: string }[],
+  opts: { tokenBudget: number; priorSummary?: string },
+): { summary: string; citedIds: string[] } {
+  if (chunks.length === 0) return { summary: opts.priorSummary ?? '', citedIds: [] };
+  const CHARS_PER_TOKEN_ESTIMATE = 4;
+  const budgetChars = opts.tokenBudget * CHARS_PER_TOKEN_ESTIMATE;
+  const parts: string[] = opts.priorSummary ? [opts.priorSummary] : [];
+  const citedIds: string[] = [];
+  let used = parts.join('\n').length;
+  for (const chunk of chunks) {
+    if (used + chunk.content.length > budgetChars && citedIds.length > 0) break;
+    parts.push(chunk.content);
+    citedIds.push(chunk.id);
+    used += chunk.content.length;
+  }
+  return { summary: `No LLM configured — showing the most relevant passages verbatim: ${parts.join(' / ')}`, citedIds };
+}
+
 const EMBEDDING_DIM = 1536;
 
 /**
@@ -150,6 +219,54 @@ function stubExtract(snippet: string): CaptureCandidate[] {
     .map((content) => ({ content }));
 }
 
+// Shared parsing helpers for the two real providers' Phase 17 methods (AnthropicLlmProvider and
+// OpenRouterLlmProvider) — one place for "how a query-expansion/relevance/summary reply gets
+// interpreted" rather than two copies that could quietly drift apart.
+
+function mergeWithOriginal(query: string, rewritten: string[]): string[] {
+  return [query, ...rewritten.filter((v) => v !== query)];
+}
+
+function parseDateFilter(raw?: { after?: string; before?: string }): { after?: Date; before?: Date } | undefined {
+  if (!raw) return undefined;
+  const after = raw.after ? new Date(raw.after) : undefined;
+  const before = raw.before ? new Date(raw.before) : undefined;
+  const validAfter = after && !isNaN(after.getTime()) ? after : undefined;
+  const validBefore = before && !isNaN(before.getTime()) ? before : undefined;
+  if (!validAfter && !validBefore) return undefined;
+  return { after: validAfter, before: validBefore };
+}
+
+function parseRelevanceReply(reply: string, candidates: { id: string; content: string }[]): string[] {
+  const trimmed = reply.trim();
+  if (trimmed.toUpperCase() === 'NONE') return [];
+  if (!/^[\d\s,]+$/.test(trimmed)) {
+    // Not a parse failure worth throwing over (the call itself succeeded) — but also not a
+    // trustworthy relevance judgment, so fail open by keeping every candidate rather than
+    // silently dropping all of them (§7.4).
+    logger.error('Relevance-assessment reply was not in the expected format; keeping all candidates');
+    return candidates.map((c) => c.id);
+  }
+  const indices = trimmed
+    .split(',')
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length);
+  return indices.map((i) => candidates[i].id);
+}
+
+function parseSummaryReply(reply: string, chunks: { id: string; content: string }[]): { summary: string; citedIds: string[] } {
+  const usedMatch = reply.match(/USED:\s*([\d,\s]+)/i);
+  const summary = reply.replace(/USED:\s*[\d,\s]+/i, '').trim();
+  const citedIds = usedMatch
+    ? usedMatch[1]
+        .split(',')
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((i) => Number.isInteger(i) && i >= 0 && i < chunks.length)
+        .map((i) => chunks[i].id)
+    : chunks.map((c) => c.id);
+  return { summary, citedIds };
+}
+
 export const stubLlmProvider: LlmProvider = {
   async extractMemoryCandidates(snippet: string) {
     return stubExtract(snippet);
@@ -171,6 +288,15 @@ export const stubLlmProvider: LlmProvider = {
   },
   async extractEntities(text: string) {
     return stubExtractEntities(text);
+  },
+  async expandQuery(query: string) {
+    return stubExpandQuery(query);
+  },
+  async assessChunkRelevance(query, candidates) {
+    return stubAssessChunkRelevance(query, candidates);
+  },
+  async summarizeWithCitations(_query, chunks, opts) {
+    return stubSummarizeWithCitations(chunks, opts);
   },
 };
 
@@ -333,6 +459,69 @@ class AnthropicLlmProvider implements LlmProvider {
       logger.error('Anthropic entity-extraction reply was not valid JSON; falling back to stub');
       return stubExtractEntities(text);
     }
+  }
+
+  // Phase 17 (§7.4 "fail open, never fail silent"): unlike the methods above, an actual call
+  // failure here throws rather than falling back to a stub-shaped result. A recall pipeline stage
+  // silently substituting a plausible-looking result on provider failure is exactly the anti-
+  // pattern the spec calls "the single highest-value bug" next to raw-score fusion — the caller
+  // needs to be able to tell "the provider is down" from "genuinely nothing relevant" (a 500-plus-
+  // retry is very different from a legitimate 200 with an empty result). A malformed-but-present
+  // response (the call succeeded, the content just didn't parse) is a different, lower-severity
+  // case — handled per method below, generally by degrading rather than throwing.
+  async expandQuery(query: string, now: Date): Promise<{ variants: string[]; dateFilter?: { after?: Date; before?: Date } }> {
+    const res = await this.complete(
+      'Rewrite the recall query into 2-4 first-person variants of what the user probably said back ' +
+        'then (statement form, not question form) — e.g. "what did I decide about the database" becomes ' +
+        'variants like "we decided to use Postgres" or "I chose Postgres for the database". Also extract ' +
+        `any date range the query implies, relative to right now (${now.toISOString()}). Reply with ONLY ` +
+        'strict JSON of the shape {"variants":["...","..."],"dateFilter":{"after":"ISO date","before":"ISO date"}}. ' +
+        'Omit dateFilter entirely if no date is implied. No commentary, no markdown fences.',
+      query,
+      256,
+    );
+    if (res === null) throw new Error('LLM query-expansion call failed');
+    try {
+      const parsed = JSON.parse(res) as { variants?: unknown; dateFilter?: { after?: string; before?: string } };
+      const rewritten = Array.isArray(parsed.variants) ? parsed.variants.filter((v): v is string => typeof v === 'string') : [];
+      return { variants: mergeWithOriginal(query, rewritten), dateFilter: parseDateFilter(parsed.dateFilter) };
+    } catch {
+      logger.error('Anthropic query-expansion reply was not valid JSON; using the original query only');
+      return { variants: [query] };
+    }
+  }
+
+  async assessChunkRelevance(query: string, candidates: { id: string; content: string }[]): Promise<string[]> {
+    if (candidates.length === 0) return [];
+    const listing = candidates.map((c, i) => `[${i}] ${c.content}`).join('\n');
+    const res = await this.complete(
+      'Given the query and a numbered list of candidate passages, reply with ONLY the indices of ' +
+        'passages that actually answer or are directly relevant to the query — not just superficially ' +
+        'similar — comma-separated (e.g. "0,3,4"). If none are relevant, reply with NONE. No commentary.',
+      `Query: ${query}\n\nCandidates:\n${listing}`,
+      128,
+    );
+    if (res === null) throw new Error('LLM relevance-assessment call failed');
+    return parseRelevanceReply(res, candidates);
+  }
+
+  async summarizeWithCitations(
+    query: string,
+    chunks: { id: string; content: string }[],
+    opts: { tokenBudget: number; priorSummary?: string },
+  ): Promise<{ summary: string; citedIds: string[] }> {
+    if (chunks.length === 0) return { summary: '', citedIds: [] };
+    const listing = chunks.map((c, i) => `[${i}] ${c.content}`).join('\n\n');
+    const priorContext = opts.priorSummary ? `What's established so far: ${opts.priorSummary}\n\n` : '';
+    const res = await this.complete(
+      `Summarize the passages below, addressing the query, within roughly ${opts.tokenBudget} tokens. ` +
+        'Ground every claim in the passages — do not invent anything they don\'t say. End your reply ' +
+        'with a line "USED: <comma-separated indices you drew from>".',
+      `${priorContext}Query: ${query}\n\nPassages:\n${listing}`,
+      opts.tokenBudget + 50,
+    );
+    if (res === null) throw new Error('LLM summarization call failed');
+    return parseSummaryReply(res, chunks);
   }
 
   private async complete(system: string, userText: string, maxTokens: number): Promise<string | null> {
@@ -499,6 +688,63 @@ class OpenRouterLlmProvider implements LlmProvider {
     }
   }
 
+  // Phase 17 (§7.4) — same "throw on real call failure, degrade gracefully on merely-malformed
+  // content" discipline as AnthropicLlmProvider's identical methods; see that class's comment.
+  async expandQuery(query: string, now: Date): Promise<{ variants: string[]; dateFilter?: { after?: Date; before?: Date } }> {
+    const res = await this.complete(
+      'Rewrite the recall query into 2-4 first-person variants of what the user probably said back ' +
+        'then (statement form, not question form) — e.g. "what did I decide about the database" becomes ' +
+        'variants like "we decided to use Postgres" or "I chose Postgres for the database". Also extract ' +
+        `any date range the query implies, relative to right now (${now.toISOString()}). Reply with ONLY ` +
+        'strict JSON of the shape {"variants":["...","..."],"dateFilter":{"after":"ISO date","before":"ISO date"}}. ' +
+        'Omit dateFilter entirely if no date is implied. No commentary, no markdown fences.',
+      query,
+      256,
+    );
+    if (res === null) throw new Error('LLM query-expansion call failed');
+    try {
+      const parsed = JSON.parse(res) as { variants?: unknown; dateFilter?: { after?: string; before?: string } };
+      const rewritten = Array.isArray(parsed.variants) ? parsed.variants.filter((v): v is string => typeof v === 'string') : [];
+      return { variants: mergeWithOriginal(query, rewritten), dateFilter: parseDateFilter(parsed.dateFilter) };
+    } catch {
+      logger.error('OpenRouter query-expansion reply was not valid JSON; using the original query only');
+      return { variants: [query] };
+    }
+  }
+
+  async assessChunkRelevance(query: string, candidates: { id: string; content: string }[]): Promise<string[]> {
+    if (candidates.length === 0) return [];
+    const listing = candidates.map((c, i) => `[${i}] ${c.content}`).join('\n');
+    const res = await this.complete(
+      'Given the query and a numbered list of candidate passages, reply with ONLY the indices of ' +
+        'passages that actually answer or are directly relevant to the query — not just superficially ' +
+        'similar — comma-separated (e.g. "0,3,4"). If none are relevant, reply with NONE. No commentary.',
+      `Query: ${query}\n\nCandidates:\n${listing}`,
+      128,
+    );
+    if (res === null) throw new Error('LLM relevance-assessment call failed');
+    return parseRelevanceReply(res, candidates);
+  }
+
+  async summarizeWithCitations(
+    query: string,
+    chunks: { id: string; content: string }[],
+    opts: { tokenBudget: number; priorSummary?: string },
+  ): Promise<{ summary: string; citedIds: string[] }> {
+    if (chunks.length === 0) return { summary: '', citedIds: [] };
+    const listing = chunks.map((c, i) => `[${i}] ${c.content}`).join('\n\n');
+    const priorContext = opts.priorSummary ? `What's established so far: ${opts.priorSummary}\n\n` : '';
+    const res = await this.complete(
+      `Summarize the passages below, addressing the query, within roughly ${opts.tokenBudget} tokens. ` +
+        'Ground every claim in the passages — do not invent anything they don\'t say. End your reply ' +
+        'with a line "USED: <comma-separated indices you drew from>".',
+      `${priorContext}Query: ${query}\n\nPassages:\n${listing}`,
+      opts.tokenBudget + 50,
+    );
+    if (res === null) throw new Error('LLM summarization call failed');
+    return parseSummaryReply(res, chunks);
+  }
+
   private headers() {
     return {
       'content-type': 'application/json',
@@ -571,6 +817,9 @@ export function getLlmProvider(): LlmProvider {
     rerank: (query, candidates) => extraction.rerank(query, candidates),
     answerWithContext: (question, chunks) => extraction.answerWithContext(question, chunks),
     extractEntities: (text) => extraction.extractEntities(text),
+    expandQuery: (query, now) => extraction.expandQuery(query, now),
+    assessChunkRelevance: (query, candidates) => extraction.assessChunkRelevance(query, candidates),
+    summarizeWithCitations: (query, chunks, opts) => extraction.summarizeWithCitations(query, chunks, opts),
   };
   return cached;
 }

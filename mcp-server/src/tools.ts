@@ -225,8 +225,8 @@ export function registerMemoryOsTools(server: McpServer, client: MemoryOsApiClie
     },
     async ({ query, bucketId }) => {
       try {
-        const { message } = await client.recallChatHistory(query, bucketId);
-        return ok(message);
+        const result = await client.recallChatHistory(query, bucketId);
+        return ok(result);
       } catch (err) {
         return fail((err as Error).message);
       }

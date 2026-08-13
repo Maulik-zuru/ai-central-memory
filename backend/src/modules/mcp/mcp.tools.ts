@@ -8,11 +8,12 @@ import { memoryService } from '../memory/memory.service';
 import { bucketService } from '../bucket/bucket.service';
 import { categoryService } from '../category/category.service';
 import { conversationService } from '../chat-history/conversation.service';
-import { askService } from '../ask/ask.service';
+import { chatSearchService } from '../chat-history/chat-search.service';
 import { fileSearchService } from '../file/file-search.service';
 
 const PAGE_LIMIT = z.number().int().min(1).max(100).default(20);
 const CONVERSATION_EXPORT_TTL_MS = 15 * 60 * 1000; // matches MemoryPlugin_Clone_Spec.md §4.2's 15-minute link
+const DEFAULT_INJECT_TOKEN_BUDGET = 600; // MemoryPlugin_Clone_Spec.md §6's /inject default budget
 
 type ToolResult = { content: { type: 'text'; text: string }[]; structuredContent?: unknown };
 type ToolAnnotations = { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
@@ -212,8 +213,10 @@ export function registerMemoryOsTools(server: McpServer, ctx: { userId: string }
       annotations: { readOnlyHint: true },
     },
     async ({ query, bucketId }) => {
-      const result = await askService.ask(userId, { question: query, mode: 'chat_history', bucketId });
-      return { content: [{ type: 'text', text: JSON.stringify(result.message) }], structuredContent: result.message };
+      // Phase 17 (US-ARC-07): the same six-stage recall pipeline the REST /inject endpoint
+      // calls — "one pipeline, multiple callers" — not the older, generic Ask multi-source path.
+      const result = await chatSearchService.inject(userId, { query, bucketId, maxTokens: DEFAULT_INJECT_TOKEN_BUDGET });
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result };
     },
   );
 

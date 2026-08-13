@@ -445,3 +445,55 @@ describe('Programmatic ingest and delete (US-INT-06)', () => {
     expect(stillThere).not.toBeNull();
   });
 });
+
+describe('Chat History Archive — recall inject (US-ARC-07, Phase 17)', () => {
+  beforeEach(resetDb);
+
+  it('returns a synthesized summary citing the conversation it actually drew from', async () => {
+    const { token, bucketId } = await seedAccount('inject-a@example.com');
+    await importAndWait(token, bucketId, 'chatgpt', chatGptExport([{ role: 'user', text: 'We ultimately chose Postgres with pgvector for the search backend.', epochSec: 1700000000 }], 'DB decision'), 1);
+
+    const res = await request(app)
+      .post('/api/chat-history/inject')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ query: 'what did we decide about postgres?' });
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.summary).toBe('string');
+    expect(res.body.summary.length).toBeGreaterThan(0);
+    expect(res.body.citations.length).toBeGreaterThan(0);
+    expect(res.body.citations[0].title).toBe('DB decision');
+  });
+
+  it('returns an empty summary and no citations when nothing has been imported yet', async () => {
+    const { token } = await seedAccount('inject-empty@example.com');
+
+    const res = await request(app).post('/api/chat-history/inject').set('Authorization', `Bearer ${token}`).send({ query: 'anything' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ summary: '', citations: [] });
+  });
+
+  it('rejects a maxTokens over the spec\'s 2000 hard cap', async () => {
+    const { token } = await seedAccount('inject-cap@example.com');
+
+    const res = await request(app)
+      .post('/api/chat-history/inject')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ query: 'anything', maxTokens: 5000 });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('403s an inject scoped to a bucket the caller is not a member of', async () => {
+    const { bucketId } = await seedAccount('inject-owner@example.com');
+    const { token: outsiderToken } = await seedAccount('inject-outsider@example.com');
+
+    const res = await request(app)
+      .post('/api/chat-history/inject')
+      .set('Authorization', `Bearer ${outsiderToken}`)
+      .send({ query: 'anything', bucketId });
+
+    expect(res.status).toBe(403);
+  });
+});

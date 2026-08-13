@@ -2,7 +2,9 @@ import crypto from 'crypto';
 import { NextFunction, Request, Response, Router } from 'express';
 import { AppError } from '../../shared/errors';
 import { asyncHandler } from '../../shared/errorHandler';
+import { logger } from '../../shared/logger';
 import { healthService } from './health.service';
+import { rechunkService } from '../chat-history/rechunk.service';
 
 /**
  * Internal operator surface, not a customer one. Three deliberate properties:
@@ -34,5 +36,22 @@ opsRouter.get(
   requireOpsKey,
   asyncHandler(async (_req: Request, res: Response) => {
     res.status(200).json(await healthService.snapshot());
+  }),
+);
+
+// Phase 17 (US-ARC-07): the token-based re-chunk migration's operator trigger — "run once,
+// dry-run against a copy first" (?dryRun=true reports the backlog and writes nothing). A real run
+// is fire-and-forget: the backlog can span every message ever imported, so this returns
+// immediately rather than holding one HTTP request open for however long that takes — poll
+// ?dryRun=true afterward to watch messagesRemaining fall to 0.
+opsRouter.post(
+  '/rechunk-message-chunks',
+  requireOpsKey,
+  asyncHandler(async (req: Request, res: Response) => {
+    if (req.query.dryRun === 'true') {
+      return res.status(200).json({ dryRun: true, ...(await rechunkService.dryRun()) });
+    }
+    void rechunkService.run().catch((err) => logger.error({ err }, 'Message re-chunk migration failed'));
+    res.status(202).json({ started: true });
   }),
 );

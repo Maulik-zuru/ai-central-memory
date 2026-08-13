@@ -11,6 +11,16 @@ export const searchSchema = z.object({
   mode: z.enum(['semantic', 'precise']).default('semantic'),
 });
 
+// Phase 17 (US-ARC-07): MemoryPlugin_Clone_Spec.md §6's `POST /api/chat-history/inject` — the
+// full six-stage pipeline (query expansion, hybrid+RRF, rerank, relevance assessment, context
+// expansion, budgeted cited summarization), unlike `/search`'s raw-chunks-no-synthesis contract.
+// `maxTokens` defaults to 600, capped at 2000, per the spec's own injection-endpoint budget.
+export const injectSchema = z.object({
+  query: z.string().trim().min(1).max(2000),
+  bucketId: z.string().min(1).optional(),
+  maxTokens: z.coerce.number().int().min(1).max(2000).default(600),
+});
+
 export const listConversationsSchema = z.object({
   bucketId: z.string().min(1).optional(),
   cursor: z.string().min(1).optional(),

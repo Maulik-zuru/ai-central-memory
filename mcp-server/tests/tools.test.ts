@@ -124,15 +124,15 @@ describe('registerMemoryOsTools', () => {
     }
   });
 
-  it('memoryos_recall_chat_history returns the synthesized message', async () => {
+  it('memoryos_recall_chat_history returns the synthesized, cited summary', async () => {
     const apiClient = {
-      recallChatHistory: jest.fn().mockResolvedValue({ conversationId: 'c1', message: { id: 'msg1', content: 'You mentioned X', citations: [] } }),
+      recallChatHistory: jest.fn().mockResolvedValue({ summary: 'You mentioned X', citations: [{ conversationId: 'c1', title: 'T' }] }),
     } as unknown as MemoryOsApiClient;
     const client = await connectedClient(apiClient);
 
     const result = await client.callTool({ name: 'memoryos_recall_chat_history', arguments: { query: 'what did I say about X?' } });
 
     expect(apiClient.recallChatHistory).toHaveBeenCalledWith('what did I say about X?', undefined);
-    expect(JSON.parse(textOf(result as never))).toEqual({ id: 'msg1', content: 'You mentioned X', citations: [] });
+    expect(JSON.parse(textOf(result as never))).toEqual({ summary: 'You mentioned X', citations: [{ conversationId: 'c1', title: 'T' }] });
   });
 });

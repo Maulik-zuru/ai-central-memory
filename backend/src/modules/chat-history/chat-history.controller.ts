@@ -10,6 +10,7 @@ import {
   deleteConversationsSchema,
   importSchema,
   ingestCustomOnlineSchema,
+  injectSchema,
   listConversationsSchema,
   searchSchema,
 } from './chat-history.types';
@@ -49,6 +50,13 @@ export const chatHistoryController = {
     const { query, bucketId, mode } = searchSchema.parse(req.body);
     const results = await chatSearchService.search(userId, { query, bucketId, mode });
     res.status(200).json({ results });
+  },
+
+  async inject(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { query, bucketId, maxTokens } = injectSchema.parse(req.body);
+    const result = await chatSearchService.inject(userId, { query, bucketId, maxTokens });
+    res.status(200).json(result);
   },
 
   async usage(req: Request, res: Response) {

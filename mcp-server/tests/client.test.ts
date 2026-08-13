@@ -60,4 +60,15 @@ describe('MemoryOsApiClient', () => {
     global.fetch = fakeFetch({ status: 204 }) as unknown as typeof fetch;
     await expect(client.verifyCredentials()).resolves.toBeUndefined();
   });
+
+  it('recallChatHistory posts to /api/chat-history/inject with the default 600-token budget', async () => {
+    const fetchMock = fakeFetch({ status: 200, body: { summary: 'x', citations: [] } });
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await client.recallChatHistory('what did I say about X?', 'bucket-1');
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://localhost:4000/api/chat-history/inject');
+    expect(JSON.parse(options.body)).toEqual({ query: 'what did I say about X?', bucketId: 'bucket-1', maxTokens: 600 });
+  });
 });

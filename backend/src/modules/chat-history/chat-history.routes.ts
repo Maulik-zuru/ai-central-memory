@@ -21,6 +21,7 @@ chatHistoryRouter.post('/import', upload.single('file'), asyncHandler(chatHistor
 chatHistoryRouter.get('/conversations', optionalBucketRole('viewer'), asyncHandler(chatHistoryController.list));
 chatHistoryRouter.get('/conversations/:id', asyncHandler(chatHistoryController.transcript));
 chatHistoryRouter.post('/search', optionalBucketRole('viewer'), asyncHandler(chatHistoryController.search));
+chatHistoryRouter.post('/inject', optionalBucketRole('viewer'), asyncHandler(chatHistoryController.inject));
 chatHistoryRouter.get('/usage', asyncHandler(chatHistoryController.usage));
 // Retrofit (docs/Phase10_Implementation_Plan.md §3): monthly insights are Pro-only.
 chatHistoryRouter.get('/insights', requirePlan('pro'), asyncHandler(chatHistoryController.insights));

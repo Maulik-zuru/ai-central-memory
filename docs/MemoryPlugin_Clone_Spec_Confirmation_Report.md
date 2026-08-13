@@ -57,17 +57,24 @@ entirely absent.
 
 ## 4. Phase 3 — Recall quality
 
+> **Update (2026-08-13, Phase 17):** the five rows below were re-audited against
+> `backend/src/modules/chat-history/recall.service.ts` and its callers after
+> `docs/MemoryPlugin_Parity_Implementation_Plan.md` Phase 17 shipped the six-stage recall pipeline
+> this section originally found entirely missing. Everything else in this report is the original
+> 2026-08-10 point-in-time audit at `161bdb5` and has **not** been re-checked against later phases —
+> only this section's verdicts reflect current code.
+
 | Item | Verdict | Evidence |
 |---|---|---|
-| Hybrid retrieval: dense (HNSW/cosine) + BM25, fused by RRF | ❌ | `chat-search.service.ts` and `ask.service.ts` do pgvector cosine distance only (`<=>` operator). No BM25/keyword index anywhere, no fusion of any kind — a single ranked list sorted by `distance` |
-| Cross-encoder reranker fed ≥100+ candidates | ❌ | "Precise mode" (`chat-search.service.ts:123-130`) calls a single LLM completion asked to reorder a comma-separated list of indices — a prompted re-ordering, not a dedicated cross-encoder reranking model |
-| Query expansion into "what I probably said back then" variants + date-filter extraction, original query always re-included | ❌ | `chat-search.service.ts:102-104` and `ask.service.ts:147` both embed the literal user string once — no LLM rewrite, no variants, no date extraction |
-| Token-budgeted, cited summarization at read time (not pre-computed digests) | ❌ | Chat search returns raw truncated previews (`chat-search.service.ts:136`, `.slice(0,240)`), no LLM synthesis, no citations. Actual summarization (`summary.service.ts:8-28`) runs once, asynchronously, **at write time** right after sync, over the whole transcript — the exact opposite of the spec's "summarize at read time, shaped by the actual query" design choice (§7 of the spec) |
-| Fail-open with explicit failure-vs-empty-result distinction | ❌ | Embedding/extraction provider failures are caught and silently substituted with a fallback (`llm.provider.ts:373-380,415-421`) — a provider outage and "genuinely nothing relevant" are indistinguishable to every caller |
+| Hybrid retrieval: dense (HNSW/cosine) + BM25, fused by RRF | ✅ | `recall.service.ts`'s `denseSearch()`/`keywordSearch()` (the latter against the `contentTsv` GIN index the Phase 17 migration added) fused via `rank-fusion.ts`'s `reciprocalRankFusion()` — `1/(k+rank+1)` per retriever, never a raw-score sum (`rank-fusion.test.ts` hand-verifies the fused order against an independently-computed example) |
+| Cross-encoder reranker fed ≥100+ candidates | ✅ | `recall.service.ts`'s `rerankRows()` feeds `provider.rerank()` the fused pool from hybrid search (each retriever over-fetches to ≥100 candidates — `DENSE_CANDIDATE_LIMIT`/`KEYWORD_CANDIDATE_LIMIT`), not a raw top-K; still LLM-prompted re-ordering rather than a dedicated cross-encoder model, matching this codebase's existing `rerank()` provider shape (a real cross-encoder is a provider-swap away, not a pipeline-shape change) |
+| Query expansion into "what I probably said back then" variants + date-filter extraction, original query always re-included | ✅ | `LlmProvider.expandQuery()` (`llm.provider.ts`) rewrites into first-person variants + extracts a date filter anchored to `now`; `recall()` fuses per-variant hybrid results via `fuseAcrossVariants()` (best rank across variants, never first-list-wins); the original query is unconditionally re-added (`mergeWithOriginal()`) |
+| Token-budgeted, cited summarization at read time (not pre-computed digests) | ✅ | `recallAndSummarize()` (Stage 6) folds survivors into a budgeted, cited summary via `LlmProvider.summarizeWithCitations()`, with a map-reduce fold (`batchByTokenCeiling()`) for survivor sets too large for one pass — implements ADR-0005 exactly, alongside (not replacing) the existing write-time `summary.service.ts` digest |
+| Fail-open with explicit failure-vs-empty-result distinction | 🟡 | The three new Phase 17 provider methods (`expandQuery`/`assessChunkRelevance`/`summarizeWithCitations`) throw on a real call failure rather than silently substituting a stub-shaped result — a caller can tell "the provider is down" from "genuinely nothing relevant" for these specifically. The pre-existing methods this row originally cited (`embed`/`extractMemoryCandidates`/etc., still at roughly the same lines) were explicitly left as-is: Phase 17's own plan named this "the fuller sweep" as Phase 18's job, and warned only against introducing *new* instances of the anti-pattern while building six new provider-calling stages — which is what happened, not a full-codebase fix |
 
-**Phase 3: 0 of 5 built.** The spec calls this phase "where most of the real engineering effort goes"
-— it's also where this codebase has the largest architecture gap of any phase. See §7 of the deep
-analysis report for the full technical breakdown of what a correct implementation requires.
+**Phase 3: 4 of 5 built, 1 partial.** The remaining partial credit is exactly the scope Phase 18
+("Reliability and non-functional architecture fixes") already commits to closing — not a new gap
+this update discovered.
 
 ---
 

@@ -92,12 +92,15 @@ export class MemoryOsApiClient {
     );
   }
 
-  recallChatHistory(question: string, bucketId?: string) {
-    return this.request<{ conversationId: string; message: { id: string; content: string; citations: unknown[] } }>(
-      'POST',
-      '/api/ask',
-      { question, mode: 'chat_history', bucketId },
-    );
+  // Phase 17 (US-ARC-07): the six-stage recall pipeline via /inject — the same endpoint the REST
+  // API and the remote MCP server's recall_chat_history tool both call. Default 600-token budget
+  // matches MemoryPlugin_Clone_Spec.md §6's /inject default.
+  recallChatHistory(query: string, bucketId?: string) {
+    return this.request<{ summary: string; citations: unknown[] }>('POST', '/api/chat-history/inject', {
+      query,
+      bucketId,
+      maxTokens: 600,
+    });
   }
 
   getConversation(conversationId: string, opts: { cursor?: number; limit: number }) {

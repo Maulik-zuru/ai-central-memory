@@ -278,6 +278,11 @@ model Message {
   // Phase 9: knowledge graph extraction marker — mirrors Memory.graphProcessedAt.
   graphProcessedAt DateTime?
   graphEdges KnowledgeGraphEdge[]
+  // Phase 17 (US-ARC-07): set the moment this message's chunks are the new ~256-token,
+  // light-overlap shape (chunkByTokens) rather than the old character-based one. sync.service.ts
+  // sets it immediately for every newly-imported message; rechunk.service.ts's migration is what
+  // backfills it — and therefore what it queries by — for messages imported before Phase 17.
+  rechunkedAt DateTime?
 
   @@unique([conversationId, position])
   @@index([conversationId])
@@ -289,6 +294,12 @@ model MessageChunk {
   message   Message                      @relation(fields: [messageId], references: [id], onDelete: Cascade)
   content   String
   embedding Unsupported("vector(1536)")?
+  // Phase 17 (US-ARC-07): the keyword half of hybrid search — a generated column (see this
+  // migration's raw SQL) kept in sync with `content` by Postgres itself, never written to from
+  // application code, so it can never drift out of sync the way a manually-maintained column
+  // could. `Unsupported` for the same reason `embedding` is: Prisma's schema language has no
+  // tsvector type, same as it has no vector type.
+  contentTsv Unsupported("tsvector")?
   createdAt DateTime                     @default(now())
 
   @@index([messageId])

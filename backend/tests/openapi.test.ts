@@ -32,6 +32,7 @@ describe('OpenAPI spec (US-INT-06)', () => {
     expect(paths['/api/buckets'].get).toBeDefined();
     expect(paths['/api/buckets'].post).toBeDefined();
     expect(paths['/api/chat-history/search'].post).toBeDefined();
+    expect(paths['/api/chat-history/inject'].post).toBeDefined();
     expect(paths['/api/chat-history/conversations'].get).toBeDefined();
     expect(paths['/api/chat-history/conversations/{id}'].get).toBeDefined();
     expect(paths['/api/chat-history/usage'].get).toBeDefined();

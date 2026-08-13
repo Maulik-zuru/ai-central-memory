@@ -1,7 +1,7 @@
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { createMemorySchema, bulkDeleteMemoriesSchema } from '../memory/memory.types';
 import { createBucketSchema } from '../bucket/bucket.types';
-import { searchSchema, ingestCustomOnlineSchema, deleteConversationsSchema } from '../chat-history/chat-history.types';
+import { searchSchema, injectSchema, ingestCustomOnlineSchema, deleteConversationsSchema } from '../chat-history/chat-history.types';
 
 /**
  * Phase 15 (US-INT-06): a generated OpenAPI 3.0 document, not a hand-maintained one — every
@@ -10,7 +10,7 @@ import { searchSchema, ingestCustomOnlineSchema, deleteConversationsSchema } fro
  * cannot silently drift out of sync with what a request actually needs to look like the way a
  * separately-authored spec file would.
  *
- * Scope, stated plainly rather than left implicit: this document covers the 15 endpoints named in
+ * Scope, stated plainly rather than left implicit: this document covers the 16 endpoints named in
  * MemoryPlugin_Clone_Spec.md §6 as this codebase's public, integration-facing surface (mapped onto
  * our actual paths — see each operation's `description` for where a path/shape deliberately
  * differs from the spec's own naming). Every other mounted router (auth, account, API keys,
@@ -19,9 +19,8 @@ import { searchSchema, ingestCustomOnlineSchema, deleteConversationsSchema } fro
  * `x-internal-routers` below, rather than enumerated route-by-route — OpenAPI's `paths` object
  * only accepts literal path templates, so there is no structurally valid way to mark "everything
  * under this prefix" inline in `paths` itself. `POST /api/chat-history/inject` (the spec's
- * AI-synthesized recall endpoint) is intentionally NOT listed as built: it depends on the
- * six-stage recall pipeline Phase 17 has not shipped yet, and documenting a real path here for
- * logic that doesn't exist would misrepresent what this API can currently do.
+ * AI-synthesized recall endpoint) shipped in Phase 17, once the six-stage recall pipeline
+ * (backend/src/modules/chat-history/recall.service.ts) existed underneath it.
  */
 
 // `zod-to-json-schema`'s generic signature drives `tsc` into an unbounded type-instantiation loop
@@ -213,6 +212,19 @@ export function buildOpenApiDocument(baseUrl: string) {
           security: BEARER_AUTH,
           requestBody: jsonBody(searchSchema),
           responses: { '200': jsonResponse('Matched chunks, ranked.') },
+        },
+      },
+      '/api/chat-history/inject': {
+        post: {
+          summary: 'Recall: hybrid search + AI-synthesized, cited summary',
+          description:
+            'The full six-stage recall pipeline (MemoryPlugin_Clone_Spec.md §5.4): query expansion, hybrid ' +
+            'dense+keyword search fused by Reciprocal Rank Fusion, rerank, per-chunk relevance assessment, ' +
+            'context expansion, and a token-budgeted summary with citations.',
+          tags: ['Chat History'],
+          security: BEARER_AUTH,
+          requestBody: jsonBody(injectSchema),
+          responses: { '200': jsonResponse('A synthesized, cited summary.') },
         },
       },
       '/api/chat-history/conversations': {
