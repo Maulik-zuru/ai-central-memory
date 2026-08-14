@@ -2,8 +2,7 @@ import { prisma } from '../../shared/prisma';
 import { logger } from '../../shared/logger';
 import { getLlmProvider } from '../../shared/providers/llm.provider';
 import { toVectorLiteral } from '../../shared/vector';
-import { duplicateDetectionService } from './duplicate-detection.service';
-import { staleDetectionService } from './stale-detection.service';
+import { curatorService } from './curator.service';
 import { categorizationService } from './categorization.service';
 
 // No real job queue this phase (see docs/Phase2_Implementation_Plan.md §3 — Redis/BullMQ is a
@@ -20,8 +19,7 @@ export const embeddingService = {
       await prisma.$executeRaw`
         UPDATE "Memory" SET embedding = ${toVectorLiteral(embedding)}::vector WHERE id = ${memoryId}
       `;
-      await duplicateDetectionService.run(userId, memoryId);
-      await staleDetectionService.run(userId, memoryId);
+      await curatorService.run(userId, memoryId);
       await categorizationService.run(userId, memoryId);
     } catch (err) {
       logger.error({ err, memoryId }, 'Embedding pipeline failed');

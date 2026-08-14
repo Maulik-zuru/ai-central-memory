@@ -76,15 +76,19 @@ describe('LlmProvider — Phase 18 fail-open, never fail-silent (§7.4)', () => 
       await expect(provider.summarizeWithCitations('query', [{ id: 'a', content: 'x' }], { tokenBudget: 100 })).rejects.toThrow(ProviderError);
     });
 
-    it('classifyStaleness throws ProviderError on a failed call', async () => {
+    it('proposeCuratorAction throws ProviderError on a failed call', async () => {
       global.fetch = fakeFetch(500, {}) as unknown as typeof fetch;
-      await expect(provider.classifyStaleness('older', 'newer')).rejects.toThrow(ProviderError);
+      const target = { id: 'a', content: 'older content', createdAt: new Date() };
+      const neighbor = { id: 'b', content: 'newer content', createdAt: new Date() };
+      await expect(provider.proposeCuratorAction(target, [neighbor])).rejects.toThrow(ProviderError);
     });
 
-    it('classifyStaleness falls back to the surface-cue heuristic (not a throw) on a malformed-but-present reply', async () => {
-      global.fetch = fakeFetch(200, { content: [{ text: 'not REPLACES or EXTENDS' }] }) as unknown as typeof fetch;
-      const result = await provider.classifyStaleness('I live in Berlin.', 'I now live in Lisbon.');
-      expect(result).toBe('replaces');
+    it('proposeCuratorAction falls back to the word-overlap heuristic (not a throw) on a malformed-but-present reply', async () => {
+      global.fetch = fakeFetch(200, { content: [{ text: 'not a recognized action line' }] }) as unknown as typeof fetch;
+      const older = { id: 'older', content: 'I live in Berlin and work as a software engineer.', createdAt: new Date(Date.now() - 2 * 86_400_000) };
+      const newer = { id: 'newer', content: 'I now live in Lisbon and work as a software engineer.', createdAt: new Date() };
+      const result = await provider.proposeCuratorAction(older, [newer]);
+      expect(result).toMatchObject({ action: 'update', memoryId: 'older' });
     });
   });
 
@@ -106,9 +110,11 @@ describe('LlmProvider — Phase 18 fail-open, never fail-silent (§7.4)', () => 
       await expect(provider.extractMemoryCandidates('snippet')).rejects.toThrow(ProviderError);
     });
 
-    it('classifyStaleness throws ProviderError on a failed call', async () => {
+    it('proposeCuratorAction throws ProviderError on a failed call', async () => {
       global.fetch = fakeFetch(500, {}) as unknown as typeof fetch;
-      await expect(provider.classifyStaleness('older', 'newer')).rejects.toThrow(ProviderError);
+      const target = { id: 'a', content: 'older content', createdAt: new Date() };
+      const neighbor = { id: 'b', content: 'newer content', createdAt: new Date() };
+      await expect(provider.proposeCuratorAction(target, [neighbor])).rejects.toThrow(ProviderError);
     });
   });
 

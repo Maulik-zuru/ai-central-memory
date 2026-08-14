@@ -61,15 +61,47 @@ describe('LlmProvider — Phase 17 recall-pipeline methods (stub)', () => {
     });
   });
 
-  describe('classifyStaleness (Phase 18.6, ADR-0003)', () => {
-    it('classifies a genuine contradiction as "replaces"', async () => {
-      const result = await provider.classifyStaleness('I live in Berlin.', 'I now live in Lisbon.');
-      expect(result).toBe('replaces');
+  describe('proposeCuratorAction (Phase 19, ADR-0004)', () => {
+    function item(id: string, content: string, daysAgo: number) {
+      return { id, content, createdAt: new Date(Date.now() - daysAgo * 86_400_000) };
+    }
+
+    it('proposes nothing for an empty cluster', async () => {
+      const result = await provider.proposeCuratorAction(item('a', 'anything', 0), []);
+      expect(result).toEqual({ action: 'none' });
     });
 
-    it('classifies a mere addition as "extends"', async () => {
-      const result = await provider.classifyStaleness('My phone number is 555-1000.', 'My work phone number is 555-2000.');
-      expect(result).toBe('extends');
+    it('proposes "remove" for a near-identical pair, targeting the newer memory', async () => {
+      const older = item('older', 'I deploy my side projects to Railway now.', 2);
+      const newer = item('newer', 'I deploy my side projects to Railway now', 0);
+      const result = await provider.proposeCuratorAction(newer, [older]);
+      expect(result).toEqual({ action: 'remove', memoryId: 'newer' });
+    });
+
+    it('proposes "update" for a genuine contradiction, targeting the older memory with the newer content', async () => {
+      const older = item('older', 'I live in Berlin and work as a software engineer.', 2);
+      const newer = item('newer', 'I now live in Lisbon and work as a software engineer.', 0);
+      const result = await provider.proposeCuratorAction(older, [newer]);
+      expect(result).toMatchObject({ action: 'update', memoryId: 'older', content: newer.content });
+    });
+
+    it('proposes "combine" for related-but-not-contradicting memories, preserving both contents', async () => {
+      const a = item('a', 'My favorite programming language is Python.', 2);
+      const b = item('b', 'My favorite programming language is also Rust.', 0);
+      const result = await provider.proposeCuratorAction(a, [b]);
+      expect(result.action).toBe('combine');
+      if (result.action === 'combine') {
+        expect(result.memoryIds.sort()).toEqual(['a', 'b']);
+        expect(result.content).toContain('Python');
+        expect(result.content).toContain('Rust');
+      }
+    });
+
+    it('proposes nothing for genuinely unrelated memories', async () => {
+      const a = item('a', 'I love hiking in the mountains every summer.', 0);
+      const b = item('b', 'Quarterly revenue grew twelve percent year over year.', 0);
+      const result = await provider.proposeCuratorAction(a, [b]);
+      expect(result).toEqual({ action: 'none' });
     });
   });
 });

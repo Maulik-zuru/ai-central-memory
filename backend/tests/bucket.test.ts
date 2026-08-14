@@ -288,7 +288,7 @@ describe('Shared buckets (US-ORG-04)', () => {
     expect(res.status).toBe(400);
   });
 
-  it('duplicate/stale suggestions across a shared bucket are visible to both contributors', async () => {
+  it('curator remove/combine/update suggestions across a shared bucket are visible to both contributors', async () => {
     const { ownerToken, memberToken, bucketId } = await setupSharedBucket('editor');
 
     await request(app).post('/api/memories').set('Authorization', `Bearer ${ownerToken}`).send({ content: 'We ship every Friday.', bucketId });
@@ -297,6 +297,6 @@ describe('Shared buckets (US-ORG-04)', () => {
     await new Promise((r) => setTimeout(r, 300));
 
     const suggestions = await request(app).get('/api/suggestions').set('Authorization', `Bearer ${memberToken}`);
-    expect(suggestions.body.suggestions.some((s: { type: string }) => s.type === 'duplicate')).toBe(true);
+    expect(suggestions.body.suggestions.some((s: { type: string }) => s.type === 'remove')).toBe(true);
   });
 });

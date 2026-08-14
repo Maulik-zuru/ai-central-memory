@@ -2,16 +2,21 @@ import { prisma } from '../../shared/prisma';
 import { AppError } from '../../shared/errors';
 import { auditService } from '../audit/audit.service';
 import { memoryService } from '../memory/memory.service';
-import { accessibleBucketIds, ROLE_RANK, type BucketRole } from '../../shared/bucketAccess';
+import { curatorService } from '../memory/curator.service';
+import { accessibleBucketIds, requireBucketMembership, ROLE_RANK, type BucketRole } from '../../shared/bucketAccess';
 
-// Phase 3 (docs/Phase3_Implementation_Plan.md §6.4): a duplicate/stale suggestion is visible to
-// anyone with at least viewer access to the bucket its memory lives in, and actionable
+// Phase 3 (docs/Phase3_Implementation_Plan.md §6.4): a remove/combine/update suggestion is visible
+// to anyone with at least viewer access to the bucket its memory lives in, and actionable
 // (approve/dismiss) by anyone with editor+ — not just the user who happened to trigger the
-// detection pass. "Capture" suggestions have no memory yet, so they stay scoped to whoever the
+// curator pass. "Capture" suggestions have no memory yet, so they stay scoped to whoever the
 // snippet was captured for.
-async function bucketRoleFor(userId: string, suggestion: { memoryIdA: string | null }): Promise<BucketRole | null> {
-  if (!suggestion.memoryIdA) return null;
-  const memory = await prisma.memory.findUnique({ where: { id: suggestion.memoryIdA }, select: { bucketId: true } });
+//
+// Phase 19 (ADR-0004): `memoryIds[0]` is always the primary target (see MemorySuggestion's own
+// schema comment) — the one whose bucket determines visibility, regardless of type.
+async function bucketRoleFor(userId: string, suggestion: { memoryIds: string[] }): Promise<BucketRole | null> {
+  const primaryId = suggestion.memoryIds[0];
+  if (!primaryId) return null;
+  const memory = await prisma.memory.findUnique({ where: { id: primaryId }, select: { bucketId: true } });
   if (!memory) return null;
   const membership = await prisma.bucketMember.findUnique({
     where: { bucketId_userId: { bucketId: memory.bucketId, userId } },
@@ -36,16 +41,14 @@ async function requireSuggestionAccess(userId: string, id: string, minRole: Buck
 export const suggestionService = {
   async listPending(userId: string) {
     const bucketIds = await accessibleBucketIds(userId);
+    const inScopeMemoryIds = await memoryIdsInBuckets(bucketIds);
 
     return prisma.memorySuggestion.findMany({
       where: {
         status: 'pending',
         OR: [
           { type: 'capture', userId },
-          // "stale" is the pre-Phase-18 generic type — kept alongside "replaces"/"extends" (its
-          // Phase 18 replacement, ADR-0003) so any suggestion created before this change still
-          // surfaces; stale-detection.service.ts never creates new "stale" rows going forward.
-          { type: { in: ['duplicate', 'stale', 'replaces', 'extends'] }, memoryIdA: { in: await memoryIdsInBuckets(bucketIds) } },
+          { type: { in: ['remove', 'combine', 'update'] }, memoryIds: { hasSome: inScopeMemoryIds } },
         ],
       },
       orderBy: { createdAt: 'desc' },
@@ -58,30 +61,23 @@ export const suggestionService = {
 
     if (suggestion.type === 'capture') {
       await memoryService.create(userId, suggestion.draftContent ?? '', 'auto');
-    } else if (suggestion.type === 'duplicate') {
-      // Merge is its own explicit action for a user-initiated merge (US-MEM-06), but approving a
-      // duplicate suggestion from the inbox is the same operation — keep memoryIdA, fold in B.
-      // memoryService.merge() re-checks editor access on both memories itself.
-      if (suggestion.memoryIdA && suggestion.memoryIdB) {
-        await memoryService.merge(userId, suggestion.memoryIdA, suggestion.memoryIdB);
+    } else if (suggestion.type === 'remove') {
+      // memoryIds[0] is the redundant memory itself (ADR-0004) — any further ids are just the
+      // "duplicate of" context the exact/fuzzy tiers attach for the reviewer, not acted on here.
+      const [targetId] = suggestion.memoryIds;
+      if (targetId) await memoryService.delete(userId, targetId);
+    } else if (suggestion.type === 'update') {
+      // A pre-Phase-19 migrated row (the old "stale"/"replaces"/"extends" types) never captured
+      // rewritten content — approving one is then a safe no-op rather than a crash (see the
+      // migration's own comment in prisma/migrations for why).
+      const [targetId] = suggestion.memoryIds;
+      if (targetId && suggestion.draftContent) {
+        await memoryService.update(userId, targetId, suggestion.draftContent);
       }
-    } else if (suggestion.type === 'stale' || suggestion.type === 'replaces') {
-      // The older memory (memoryIdA per stale-detection.service.ts) is marked inactive, not
-      // deleted, and excluded from future retrieval (US-MEM-07 AC). "replaces" additionally
-      // records the pointer (ADR-0003) — the newer memory (memoryIdB) now knows what it
-      // superseded, giving a queryable "what did I believe as of last Tuesday" trail instead of
-      // just an inactive flag. "stale" is the pre-Phase-18 generic type (see listPending's
-      // comment) and gets the deactivation only, since it predates the supersedes relation.
-      if (suggestion.memoryIdA) {
-        await prisma.memory.update({ where: { id: suggestion.memoryIdA }, data: { status: 'stale' } });
+    } else if (suggestion.type === 'combine') {
+      if (suggestion.memoryIds.length >= 2 && suggestion.draftContent) {
+        await memoryService.combine(userId, suggestion.memoryIds, suggestion.draftContent);
       }
-      if (suggestion.type === 'replaces' && suggestion.memoryIdA && suggestion.memoryIdB) {
-        await prisma.memory.update({ where: { id: suggestion.memoryIdB }, data: { supersedesId: suggestion.memoryIdA } });
-      }
-    } else if (suggestion.type === 'extends') {
-      // Approving an "extends" suggestion is an acknowledgment, not a correction (ADR-0003) — it
-      // deliberately deactivates nothing and sets no supersedes pointer; the two memories are
-      // related, not one superseding the other.
     }
 
     const updated = await prisma.memorySuggestion.update({ where: { id }, data: { status: 'approved' } });
@@ -96,6 +92,14 @@ export const suggestionService = {
     const updated = await prisma.memorySuggestion.update({ where: { id }, data: { status: 'dismissed' } });
     await auditService.record(userId, 'suggestion.dismiss', { type: 'MemorySuggestion', id });
     return updated;
+  },
+
+  /** MemoryPlugin_Clone_Spec.md §5.2's "Check for new" manual scan action — re-runs the curator
+   * across every active memory in one bucket, for whatever a fire-and-forget per-save pass hasn't
+   * covered (e.g. memories created before the curator existed). */
+  async scanBucket(userId: string, bucketId: string) {
+    await requireBucketMembership(userId, bucketId, 'editor');
+    return curatorService.scanBucket(userId, bucketId);
   },
 };
 

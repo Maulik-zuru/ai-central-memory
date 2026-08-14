@@ -85,18 +85,35 @@ export interface LlmProvider {
     opts: { tokenBudget: number; priorSummary?: string },
   ): Promise<{ summary: string; citedIds: string[] }>;
   /**
-   * Phase 18 (ADR-0003 "supersedes relation"): of a stale-candidate pair (the same fact,
-   * mid-similarity band), does the newer memory genuinely contradict the older one ("replaces"),
-   * or merely add detail without invalidating it ("extends")? The distance-band membership check
-   * alone was never sufficient to tell these apart — this is the judgment call that was missing.
+   * Phase 19 (ADR-0004 "Memory Suggestions curator"): given one memory and its nearest-neighbor
+   * cluster (already gathered by embedding distance — this call reasons about content, not raw
+   * vector distance), propose at most one of the spec's three edits, or no action. This method only
+   * proposes; the caller (curator.service.ts) re-validates every returned id against the actual
+   * cluster before any suggestion is created — a model confidently inventing an id is exactly the
+   * failure mode that safeguard exists for.
    */
-  classifyStaleness(olderContent: string, newerContent: string): Promise<'replaces' | 'extends'>;
+  proposeCuratorAction(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): Promise<CuratorProposal>;
 }
 
 export interface EntityExtractionResult {
   entities: { name: string; type: string }[];
   relations: { from: string; to: string; label: string }[];
 }
+
+export interface CuratorClusterItem {
+  id: string;
+  content: string;
+  createdAt: Date;
+}
+
+// "you are an editor, not a writer, lose zero information" (MemoryPlugin_Clone_Spec.md §5.2) —
+// combine's content must never invent facts, and must never drop a date/quantity/identifier/
+// current-state/causal-"why" mentioned in any input memory.
+export type CuratorProposal =
+  | { action: 'none' }
+  | { action: 'remove'; memoryId: string }
+  | { action: 'combine'; memoryIds: string[]; content: string }
+  | { action: 'update'; memoryId: string; content: string };
 
 const STOPWORDS = new Set([
   'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'to', 'of', 'in',
@@ -226,18 +243,79 @@ function stubSummarizeWithCitations(
   return { summary: `No LLM configured — showing the most relevant passages verbatim: ${parts.join(' / ')}`, citedIds };
 }
 
-// Stub staleness classification: no LLM configured, so this looks for the same surface cues a
-// genuine correction tends to use ("now", "actually", "no longer", ...) rather than pretending to
-// judge meaning — same honesty bar every other stub in this file sets. Good enough to exercise
-// "replaces deactivates the old memory, extends doesn't" end to end without a network call; a real
-// provider does the actual semantic judgment behind the identical signature.
+// Stub curator proposal: no LLM configured, so this reasons about plain word overlap and the same
+// surface-level contradiction cues ("now", "actually", "no longer", ...) a genuine correction tends
+// to use, rather than pretending to judge meaning — same honesty bar every other stub in this file
+// sets. Good enough to exercise "remove/combine/update, never silently drop anything" end to end
+// without a network call; a real provider does the actual semantic judgment behind the identical
+// signature. Distance-based cluster membership already happened upstream (curator.service.ts) by
+// the time this runs — everything handed here already passed that gate.
 const CONTRADICTION_CUES = [
   'now', 'instead', 'actually', 'no longer', 'moved', 'changed', 'updated', 'used to', "isn't", 'not anymore',
 ];
+const CURATOR_NEAR_DUPLICATE_OVERLAP = 0.85;
+// By the time this runs, curator.service.ts's own embedding-distance clustering has already done
+// the real "are these worth considering together" filtering — this floor only needs to catch the
+// degenerate case of zero shared vocabulary at all (two memories that share no real-word overlap
+// whatsoever), not to re-derive relatedness from scratch via a lexical proxy. A stub reasoning from
+// text alone can't tell "same topic, different specific detail" (the exact shape a genuine 3-way
+// combine cluster has) from "unrelated" using word overlap the way a real semantic judgment would.
+const CURATOR_RELATED_OVERLAP_FLOOR = 0.05;
 
-function stubClassifyStaleness(_olderContent: string, newerContent: string): 'replaces' | 'extends' {
-  const lower = newerContent.toLowerCase();
-  return CONTRADICTION_CUES.some((cue) => lower.includes(cue)) ? 'replaces' : 'extends';
+function curatorWordSet(text: string): Set<string> {
+  return new Set((text.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length >= 3));
+}
+
+function jaccardOverlap(a: string, b: string): number {
+  const wa = curatorWordSet(a);
+  const wb = curatorWordSet(b);
+  if (wa.size === 0 || wb.size === 0) return 0;
+  let intersection = 0;
+  for (const w of wa) if (wb.has(w)) intersection++;
+  const union = new Set([...wa, ...wb]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+function stubProposeCuratorAction(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): CuratorProposal {
+  if (neighbors.length === 0) return { action: 'none' };
+
+  const scored = neighbors
+    .map((neighbor) => ({ neighbor, overlap: jaccardOverlap(target.content, neighbor.content) }))
+    .sort((a, b) => b.overlap - a.overlap);
+
+  const closest = scored[0];
+  if (closest.overlap >= CURATOR_NEAR_DUPLICATE_OVERLAP) {
+    // Near-identical — keep whichever is older, remove the newer one (the same convention
+    // duplicate-detection.service.ts used before the curator unified it).
+    const newer = closest.neighbor.createdAt > target.createdAt ? closest.neighbor : target;
+    return { action: 'remove', memoryId: newer.id };
+  }
+
+  const related = scored.filter((s) => s.overlap >= CURATOR_RELATED_OVERLAP_FLOOR);
+  if (related.length === 0) return { action: 'none' };
+
+  const involved = [target, ...related.map((s) => s.neighbor)];
+  const sortedByAge = [...involved].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  const [older] = sortedByAge;
+  const newest = sortedByAge[sortedByAge.length - 1];
+  const rest = sortedByAge.slice(1);
+
+  const hasContradictionCue = rest.some((m) => CONTRADICTION_CUES.some((cue) => m.content.toLowerCase().includes(cue)));
+  if (involved.length === 2 && hasContradictionCue) {
+    // A genuine two-way contradiction rewrites the older memory to the newer, current content —
+    // "update", not "combine" (see the Update/Combine distinction in docs/adr/0004).
+    return { action: 'update', memoryId: older.id, content: newest.content };
+  }
+
+  // A related-but-not-contradicting cluster: fold every involved memory's content, verbatim and
+  // in chronological order, into the survivor — concatenation trivially satisfies "lose zero
+  // information" (CuratorProposal's own comment) even though it isn't polished prose; a real
+  // provider does the actual clean synthesis behind the identical signature.
+  return {
+    action: 'combine',
+    memoryIds: sortedByAge.map((m) => m.id),
+    content: sortedByAge.map((m) => m.content).join('\n\n'),
+  };
 }
 
 const EMBEDDING_DIM = 1536;
@@ -324,16 +402,67 @@ function parseSummaryReply(reply: string, chunks: { id: string; content: string 
   return { summary, citedIds };
 }
 
-// Phase 18 (ADR-0003): a malformed-but-present classification reply (the call succeeded, the
-// content just wasn't exactly REPLACES/EXTENDS) is a data-quality issue, not an infra failure —
-// falls back to the same surface-cue heuristic the stub provider uses, rather than throwing.
-function parseStalenessReply(reply: string, olderContent: string, newerContent: string): 'replaces' | 'extends' {
-  const normalized = reply.trim().toUpperCase();
-  if (normalized.startsWith('REPLACES')) return 'replaces';
-  if (normalized.startsWith('EXTENDS')) return 'extends';
-  logger.error('Staleness-classification reply was not in the expected format; using the surface-cue heuristic');
-  return stubClassifyStaleness(olderContent, newerContent);
+function extractCuratorContent(lines: string[]): string | undefined {
+  const idx = lines.findIndex((l) => /^CONTENT:/i.test(l));
+  if (idx === -1) return undefined;
+  const first = lines[idx].replace(/^CONTENT:\s*/i, '');
+  return [first, ...lines.slice(idx + 1)].join('\n').trim();
 }
+
+// Phase 19 (ADR-0004): a malformed-but-present curator reply (the call succeeded, but wasn't one
+// of the expected REMOVE/COMBINE/UPDATE/NONE shapes, or referenced an out-of-range index) is a
+// data-quality issue, not an infra failure — falls back to the same word-overlap heuristic the
+// stub provider uses, rather than throwing or silently proposing nothing.
+function parseCuratorReply(reply: string, target: CuratorClusterItem, neighbors: CuratorClusterItem[]): CuratorProposal {
+  const all = [target, ...neighbors];
+  const lines = reply.split('\n').map((l) => l.trim()).filter(Boolean);
+  const first = lines[0] ?? '';
+
+  const removeMatch = first.match(/^REMOVE\s+(\d+)/i);
+  if (removeMatch) {
+    const item = all[parseInt(removeMatch[1], 10)];
+    if (item) return { action: 'remove', memoryId: item.id };
+  }
+
+  const combineMatch = first.match(/^COMBINE\s+([\d,\s]+)/i);
+  if (combineMatch) {
+    const indices = combineMatch[1].split(',').map((s) => parseInt(s.trim(), 10));
+    const items = indices.map((i) => all[i]).filter((item): item is CuratorClusterItem => Boolean(item));
+    const content = extractCuratorContent(lines) ?? items.map((i) => i.content).join('\n\n');
+    if (items.length >= 2) return { action: 'combine', memoryIds: items.map((i) => i.id), content };
+  }
+
+  const updateMatch = first.match(/^UPDATE\s+(\d+)/i);
+  if (updateMatch) {
+    const item = all[parseInt(updateMatch[1], 10)];
+    const content = extractCuratorContent(lines);
+    if (item && content) return { action: 'update', memoryId: item.id, content };
+  }
+
+  if (/^NONE/i.test(first)) return { action: 'none' };
+
+  logger.error('Curator-proposal reply was not in the expected format; using the word-overlap heuristic');
+  return stubProposeCuratorAction(target, neighbors);
+}
+
+function curatorPromptListing(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): string {
+  return [target, ...neighbors]
+    .map((item, i) => `[${i}]${i === 0 ? ' (target)' : ''} (created ${item.createdAt.toISOString()}) ${item.content}`)
+    .join('\n');
+}
+
+const CURATOR_SYSTEM_PROMPT =
+  'You are a memory curator, not a writer — you are an editor: lose zero information, never invent ' +
+  'a fact that is not already stated in one of the memories below. Given the target memory (index 0) ' +
+  "and its cluster of related memories, decide on exactly ONE of:\n" +
+  'REMOVE <index> — that memory is a duplicate/redundant memory that should be removed.\n' +
+  'COMBINE <comma-separated indices, at least two> then a line "CONTENT: <merged text>" — near-duplicate ' +
+  'memories folded into one cleaner entry; the merged text must preserve every date, quantity, ' +
+  'identifier, current state, and causal "why" mentioned in ANY of the combined memories.\n' +
+  'UPDATE <index> then a line "CONTENT: <rewritten text>" — that memory has become stale and should ' +
+  'be rewritten to reflect the current, correct fact.\n' +
+  'NONE — no edit is warranted.\n' +
+  'Reply with ONLY the action line (and a CONTENT line if required), no commentary.';
 
 export const stubLlmProvider: LlmProvider = {
   async extractMemoryCandidates(snippet: string) {
@@ -366,8 +495,8 @@ export const stubLlmProvider: LlmProvider = {
   async summarizeWithCitations(_query, chunks, opts) {
     return stubSummarizeWithCitations(chunks, opts);
   },
-  async classifyStaleness(olderContent, newerContent) {
-    return stubClassifyStaleness(olderContent, newerContent);
+  async proposeCuratorAction(target, neighbors) {
+    return stubProposeCuratorAction(target, neighbors);
   },
 };
 
@@ -558,20 +687,12 @@ export class AnthropicLlmProvider implements LlmProvider {
     return parseSummaryReply(res, chunks);
   }
 
-  // Phase 18 (ADR-0003): a genuine contradiction ("replaces") vs. an addition that doesn't
-  // invalidate anything ("extends") — see parseStalenessReply's comment for how a malformed reply
-  // degrades, and this class's shared comment above `complete()` for why a real call failure
-  // throws rather than substituting a guess.
-  async classifyStaleness(olderContent: string, newerContent: string): Promise<'replaces' | 'extends'> {
-    const res = await this.complete(
-      'You are given an older memory and a newer one about the same topic. Decide whether the ' +
-        'newer one genuinely CONTRADICTS the older one (a fact changed — reply "REPLACES"), or ' +
-        'merely ADDS detail without invalidating the older one (reply "EXTENDS"). Reply with ' +
-        'exactly one word, no commentary.',
-      `Older: ${olderContent}\n\nNewer: ${newerContent}`,
-      8,
-    );
-    return parseStalenessReply(res, olderContent, newerContent);
+  // Phase 19 (ADR-0004): remove/combine/update/none — see parseCuratorReply's comment for how a
+  // malformed reply degrades, and this class's shared comment above `complete()` for why a real
+  // call failure throws rather than substituting a guess.
+  async proposeCuratorAction(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): Promise<CuratorProposal> {
+    const res = await this.complete(CURATOR_SYSTEM_PROMPT, curatorPromptListing(target, neighbors), 512);
+    return parseCuratorReply(res, target, neighbors);
   }
 
   // Phase 18 (§7.4): the one place a real call failure becomes a thrown ProviderError instead of
@@ -798,18 +919,11 @@ export class OpenRouterLlmProvider implements LlmProvider {
     return parseSummaryReply(res, chunks);
   }
 
-  // Phase 18 (ADR-0003) — same "throw on real call failure, degrade to the surface-cue heuristic
+  // Phase 19 (ADR-0004) — same "throw on real call failure, degrade to the word-overlap heuristic
   // on merely-malformed content" discipline as AnthropicLlmProvider's identical method.
-  async classifyStaleness(olderContent: string, newerContent: string): Promise<'replaces' | 'extends'> {
-    const res = await this.complete(
-      'You are given an older memory and a newer one about the same topic. Decide whether the ' +
-        'newer one genuinely CONTRADICTS the older one (a fact changed — reply "REPLACES"), or ' +
-        'merely ADDS detail without invalidating the older one (reply "EXTENDS"). Reply with ' +
-        'exactly one word, no commentary.',
-      `Older: ${olderContent}\n\nNewer: ${newerContent}`,
-      8,
-    );
-    return parseStalenessReply(res, olderContent, newerContent);
+  async proposeCuratorAction(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): Promise<CuratorProposal> {
+    const res = await this.complete(CURATOR_SYSTEM_PROMPT, curatorPromptListing(target, neighbors), 512);
+    return parseCuratorReply(res, target, neighbors);
   }
 
   private headers() {
@@ -887,7 +1001,7 @@ export function getLlmProvider(): LlmProvider {
     expandQuery: (query, now) => extraction.expandQuery(query, now),
     assessChunkRelevance: (query, candidates) => extraction.assessChunkRelevance(query, candidates),
     summarizeWithCitations: (query, chunks, opts) => extraction.summarizeWithCitations(query, chunks, opts),
-    classifyStaleness: (olderContent, newerContent) => extraction.classifyStaleness(olderContent, newerContent),
+    proposeCuratorAction: (target, neighbors) => extraction.proposeCuratorAction(target, neighbors),
   };
   return cached;
 }

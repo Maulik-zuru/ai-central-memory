@@ -315,4 +315,34 @@ export const memoryService = {
     await requireAccess(userId, memoryId, 'viewer');
     return prisma.memoryVersion.findMany({ where: { memoryId }, orderBy: { createdAt: 'asc' } });
   },
+
+  /**
+   * Phase 19 (ADR-0004): N-way generalization of `merge()` above, used to approve a curator
+   * "combine" suggestion — `content` is the curator's own proposed merged text (preserving every
+   * named category the spec calls out: dates, quantities, identifiers, current state, causal
+   * "why"), not a blind concatenation of the originals. `memoryIds[0]` is the survivor by
+   * convention (curator.service.ts decides that ordering when the suggestion is created); every
+   * other named memory is absorbed into it exactly as `merge()`'s single absorbed memory is today —
+   * version history moves over, status flips to "merged", `mergedIntoId` records where it went.
+   */
+  async combine(userId: string, memoryIds: string[], content: string) {
+    const uniqueIds = [...new Set(memoryIds)];
+    if (uniqueIds.length < 2) throw AppError.badRequest('Combine needs at least two distinct memories');
+    const [survivorId, ...absorbedIds] = uniqueIds;
+
+    await Promise.all(uniqueIds.map((id) => requireAccess(userId, id, 'editor')));
+
+    await prisma.$transaction([
+      prisma.memoryVersion.updateMany({ where: { memoryId: { in: absorbedIds } }, data: { memoryId: survivorId } }),
+      prisma.memory.update({
+        where: { id: survivorId },
+        data: { content, versions: { create: { content, changedBy: 'system', changeType: 'merge' } } },
+      }),
+      prisma.memory.updateMany({ where: { id: { in: absorbedIds } }, data: { status: 'merged', mergedIntoId: survivorId } }),
+    ]);
+
+    void embeddingService.process(survivorId, userId, content);
+    await auditService.record(userId, 'memory.combine', { type: 'Memory', id: survivorId });
+    return this.get(userId, survivorId);
+  },
 };
