@@ -7,6 +7,9 @@ export interface Account {
   email: string;
   autoCapture: Record<string, boolean>;
   smartMemoryEnabled: boolean;
+  // Phase 22: the Account tab's plan badge — null on a free deployment with payments off
+  // (account.service.ts always reports 'pro' there, never actually null).
+  subscription: { plan: string } | null;
 }
 
 export interface Memory {
@@ -54,6 +57,16 @@ export interface ApiKeySummary {
   id: string;
   name: string;
   revoked: boolean;
+}
+
+// Phase 22: only what the popup's History tab actually renders — the full Conversation shape
+// (excludedAt/pinned/etc., Phase 21) lives dashboard-side, not duplicated here.
+export interface ConversationSummary {
+  id: string;
+  platform: string;
+  title: string;
+  status: string;
+  importedAt: string;
 }
 
 export interface PairingStartResult {

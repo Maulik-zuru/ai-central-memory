@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowSquareOutIcon,
+  ArrowsClockwiseIcon,
   BrainIcon,
   CaretDownIcon,
+  ClockCounterClockwiseIcon,
   GearSixIcon,
   MagnifyingGlassIcon,
   PlusIcon,
@@ -9,9 +12,11 @@ import {
   SparkleIcon,
   StackIcon,
   TrashIcon,
+  UserCircleIcon,
 } from "@phosphor-icons/react";
 import { sendToBackground } from "../lib/messages";
-import type { Account, Bucket, Memory, Suggestion } from "../lib/types";
+import { DASHBOARD_URL } from "../lib/config";
+import type { Account, Bucket, ConversationSummary, Memory, Suggestion } from "../lib/types";
 import { getPrefs, setPrefs } from "../lib/storage";
 
 // Fixed pixel geometry via inline style rather than Tailwind's spacing-scale utilities — keeps
@@ -87,13 +92,156 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
-        active ? "bg-[var(--card)] text-[var(--foreground)] shadow-[var(--shadow-card)]" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+      className={`flex flex-1 flex-col items-center justify-center gap-0.5 px-1 py-2 text-[10px] font-medium transition-colors ${
+        active ? "text-[var(--primary)]" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
       }`}
     >
       {icon}
       {label}
     </button>
+  );
+}
+
+// Phase 22 (MemoryPlugin_Parity_Implementation_Plan.md §Phase 22): the platform list every
+// per-platform toggle in this file iterates — extended from the original 3 DOM-adapter platforms
+// to include the two marker-line-only additions.
+const CAPTURE_PLATFORMS = ["chatgpt", "claude", "gemini", "grok", "deepseek"] as const;
+const PLATFORM_LABEL: Record<(typeof CAPTURE_PLATFORMS)[number], string> = {
+  chatgpt: "ChatGPT",
+  claude: "Claude",
+  gemini: "Gemini",
+  grok: "Grok",
+  deepseek: "DeepSeek",
+};
+
+function SyncTab() {
+  const [enabled, setEnabled] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    getPrefs().then((prefs) => {
+      setEnabled(prefs.chatHistorySyncEnabled ?? false);
+      setLoaded(true);
+    });
+  }, []);
+
+  async function toggle(v: boolean) {
+    setEnabled(v);
+    await setPrefs({ chatHistorySyncEnabled: v });
+  }
+
+  if (!loaded) return null;
+
+  return (
+    <div className="flex flex-col gap-4 p-4 text-sm">
+      <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-3">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs font-semibold">Sync chat history</span>
+          <span className="text-[11px] leading-snug text-[var(--muted-foreground)]">
+            Automatically archive whole conversations as you have them, on the platforms that support it, so
+            they&apos;re searchable later.
+          </span>
+        </div>
+        <Toggle checked={enabled} onChange={toggle} />
+      </div>
+      <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">
+        Off by default — this archives full conversations, a bigger step than saving individual memories.
+        Not available on marker-line-only platforms (Grok, DeepSeek) yet.
+      </p>
+      <a
+        href={`${DASHBOARD_URL}/dashboard/chat-history`}
+        target="_blank"
+        rel="noreferrer"
+        className="flex items-center justify-center gap-1.5 rounded-full border border-[var(--border)] px-3 py-2 text-xs font-medium"
+      >
+        View chat history
+        <ArrowSquareOutIcon size={13} />
+      </a>
+    </div>
+  );
+}
+
+function HistoryTab() {
+  const [conversations, setConversations] = useState<ConversationSummary[] | null>(null);
+
+  useEffect(() => {
+    sendToBackground<{ items: ConversationSummary[] }>({ type: "GET_CONVERSATIONS" })
+      .then((r) => setConversations(r.items))
+      .catch(() => setConversations([]));
+  }, []);
+
+  return (
+    <div className="flex flex-col gap-1.5 p-4">
+      {conversations === null ? (
+        <div className="flex flex-col gap-1.5">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-12 animate-pulse rounded-[var(--radius-md)] bg-[var(--secondary)]" />
+          ))}
+        </div>
+      ) : conversations.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-8 text-center">
+          <ClockCounterClockwiseIcon size={18} className="text-[var(--muted-foreground)]" />
+          <p className="text-xs font-medium">No synced conversations yet</p>
+          <p className="max-w-[220px] text-[11px] text-[var(--muted-foreground)]">
+            Turn on Sync to start archiving whole conversations here.
+          </p>
+        </div>
+      ) : (
+        conversations.map((c) => (
+          <a
+            key={c.id}
+            href={`${DASHBOARD_URL}/dashboard/chat-history/${c.id}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-2.5 text-xs hover:bg-[var(--secondary)]"
+          >
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <span className="truncate font-medium">{c.title}</span>
+              <span className="text-[10px] capitalize text-[var(--muted-foreground)]">
+                {c.platform} · {relativeTime(c.importedAt)}
+              </span>
+            </div>
+            <ArrowSquareOutIcon size={13} className="shrink-0 text-[var(--muted-foreground)]" />
+          </a>
+        ))
+      )}
+    </div>
+  );
+}
+
+function AccountTab({ account, onDisconnect }: { account: Account; onDisconnect: () => void }) {
+  return (
+    <div className="flex flex-col gap-4 p-4 text-sm">
+      <div className="flex items-center gap-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-3">
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--primary)]">
+          <UserCircleIcon size={20} weight="fill" color="var(--primary-foreground)" />
+        </div>
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate text-xs font-medium">{account.email}</span>
+          {account.subscription && (
+            <span className="w-fit rounded-full bg-[var(--primary-tint)] px-2 py-0.5 text-[10px] font-medium capitalize text-[var(--primary)]">
+              {account.subscription.plan}
+            </span>
+          )}
+        </div>
+      </div>
+      <a
+        href={`${DASHBOARD_URL}/dashboard/settings`}
+        target="_blank"
+        rel="noreferrer"
+        className="flex items-center justify-center gap-1.5 rounded-full border border-[var(--border)] px-3 py-2 text-xs font-medium"
+      >
+        Manage account
+        <ArrowSquareOutIcon size={13} />
+      </a>
+      <button
+        onClick={onDisconnect}
+        className="flex items-center justify-center gap-1.5 rounded-full border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--destructive)] hover:bg-[var(--destructive-foreground)]"
+      >
+        <SignOutIcon size={13} />
+        Disconnect extension
+      </button>
+    </div>
   );
 }
 
@@ -104,7 +252,9 @@ export function Panel({
   onDisconnect: () => void;
   onReplayOnboarding: () => void;
 }) {
-  const [tab, setTab] = useState<"memories" | "settings">("memories");
+  // Phase 22 (MemoryPlugin_Clone_Spec.md §4.1): restructured from 2 tabs to the spec's 5-tab
+  // shape, moved from a top header row to a bottom tab bar (see the return statement below).
+  const [tab, setTab] = useState<"memories" | "sync" | "history" | "account" | "settings">("memories");
   const [account, setAccount] = useState<Account | null>(null);
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [bucketId, setBucketId] = useState<string | undefined>(undefined);
@@ -116,6 +266,7 @@ export function Panel({
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  const [autoInjectCountdown, setAutoInjectCountdown] = useState(false);
 
   async function loadAll() {
     const { account } = await sendToBackground<{ account: Account }>({ type: "GET_ACCOUNT" });
@@ -124,6 +275,7 @@ export function Panel({
     setBuckets(buckets);
     const prefs = await getPrefs();
     setBucketId(prefs.lastBucketId ?? buckets.find((b) => b.isDefault)?.id);
+    setAutoInjectCountdown(prefs.autoInjectCountdown ?? false);
     const { suggestions: pending } = await sendToBackground<{ suggestions: Suggestion[] }>({ type: "GET_PENDING_SUGGESTIONS" });
     setSuggestions(pending.filter((s) => s.status === "pending"));
   }
@@ -170,246 +322,269 @@ export function Panel({
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
-        <div className="flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--primary)]">
-            <BrainIcon size={16} weight="fill" color="var(--primary-foreground)" />
-          </div>
-          <div className="flex flex-col leading-tight">
-            <span className="text-sm font-semibold">Memory</span>
-            <span className="text-[11px] text-[var(--muted-foreground)]">{account.email}</span>
-          </div>
+      <div className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-3">
+        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--primary)]">
+          <BrainIcon size={16} weight="fill" color="var(--primary-foreground)" />
         </div>
-        <div className="flex gap-1 rounded-lg bg-[var(--secondary)] p-0.5">
-          <TabButton active={tab === "memories"} onClick={() => setTab("memories")} icon={<StackIcon size={13} />} label="Memories" />
-          <TabButton active={tab === "settings"} onClick={() => setTab("settings")} icon={<GearSixIcon size={13} />} label="Settings" />
-        </div>
+        <span className="text-sm font-semibold">Memory</span>
+        {account.subscription && (
+          <span className="rounded-full bg-[var(--secondary)] px-2 py-0.5 text-[10px] font-medium capitalize text-[var(--muted-foreground)]">
+            {account.subscription.plan}
+          </span>
+        )}
       </div>
 
-      {tab === "memories" ? (
-        <div className="flex flex-col gap-3 p-4">
-          {suggestions.length > 0 && (
-            <div className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--primary)]/20 bg-[var(--primary-tint)] p-3">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--primary)]">
-                <SparkleIcon size={14} weight="fill" />
-                {suggestions.length} suggestion{suggestions.length === 1 ? "" : "s"} to review
-              </div>
-              <p className="line-clamp-2 text-xs text-[var(--foreground)]/80">{suggestions[0].draftContent}</p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => respondToSuggestion(suggestions[0].id, "DISMISS_SUGGESTION")}
-                  className="flex-1 rounded-full border border-[var(--border)] bg-[var(--card)] py-1.5 text-xs font-medium hover:bg-[var(--secondary)]"
-                >
-                  Dismiss
-                </button>
-                <button
-                  onClick={() => respondToSuggestion(suggestions[0].id, "APPROVE_SUGGESTION")}
-                  className="flex-1 rounded-full bg-[var(--primary)] py-1.5 text-xs font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)]"
-                >
-                  Save it
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <button
-                onClick={() => setBucketMenuOpen((v) => !v)}
-                className="flex h-8 w-full items-center justify-between gap-1 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--card)] px-2.5 text-xs font-medium"
-              >
-                <span className="truncate">{activeBucket?.name ?? "Select bucket"}</span>
-                <CaretDownIcon size={12} className="shrink-0 text-[var(--muted-foreground)]" />
-              </button>
-              {bucketMenuOpen && (
-                <div className="absolute left-0 top-9 z-10 w-full animate-in overflow-hidden rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] shadow-[var(--shadow-popover)]">
-                  {buckets.map((b) => (
-                    <button
-                      key={b.id}
-                      onClick={() => {
-                        setBucketId(b.id);
-                        setPrefs({ lastBucketId: b.id });
-                        setBucketMenuOpen(false);
-                      }}
-                      className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-[var(--secondary)] ${
-                        b.id === bucketId ? "font-semibold text-[var(--primary)]" : ""
-                      }`}
-                    >
-                      {b.name}
-                      {b.isDefault && <span className="text-[10px] text-[var(--muted-foreground)]">Default</span>}
-                    </button>
-                  ))}
+      <div className="max-h-[420px] overflow-y-auto">
+        {tab === "memories" && (
+          <div className="flex flex-col gap-3 p-4">
+            {suggestions.length > 0 && (
+              <div className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--primary)]/20 bg-[var(--primary-tint)] p-3">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--primary)]">
+                  <SparkleIcon size={14} weight="fill" />
+                  {suggestions.length} suggestion{suggestions.length === 1 ? "" : "s"} to review
                 </div>
-              )}
-            </div>
-            <button
-              onClick={() => setComposerOpen((v) => !v)}
-              className="flex h-8 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--primary)] px-3 text-xs font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)]"
-            >
-              <PlusIcon size={13} weight="bold" />
-              Add
-            </button>
-          </div>
-
-          {composerOpen && (
-            <div className="flex animate-in flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-2.5 shadow-[var(--shadow-card)]">
-              <textarea
-                autoFocus
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveDraft();
-                  if (e.key === "Escape") setComposerOpen(false);
-                }}
-                placeholder="Write something to remember…"
-                rows={3}
-                className="resize-none rounded-[var(--radius-sm)] bg-transparent text-xs outline-none placeholder:text-[var(--muted-foreground)]"
-              />
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-[var(--muted-foreground)]">
-                  Saves to <span className="font-medium">{activeBucket?.name ?? "default"}</span>
-                </span>
+                <p className="line-clamp-2 text-xs text-[var(--foreground)]/80">{suggestions[0].draftContent}</p>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => {
-                      setComposerOpen(false);
-                      setDraft("");
-                    }}
-                    className="rounded-full px-2.5 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
+                    onClick={() => respondToSuggestion(suggestions[0].id, "DISMISS_SUGGESTION")}
+                    className="flex-1 rounded-full border border-[var(--border)] bg-[var(--card)] py-1.5 text-xs font-medium hover:bg-[var(--secondary)]"
                   >
-                    Cancel
+                    Dismiss
                   </button>
                   <button
-                    onClick={saveDraft}
-                    disabled={!draft.trim() || saving}
-                    className="rounded-full bg-[var(--primary)] px-3 py-1 text-xs font-medium text-[var(--primary-foreground)] disabled:opacity-50"
+                    onClick={() => respondToSuggestion(suggestions[0].id, "APPROVE_SUGGESTION")}
+                    className="flex-1 rounded-full bg-[var(--primary)] py-1.5 text-xs font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)]"
                   >
-                    {saving ? "Saving…" : "Save"}
+                    Save it
                   </button>
                 </div>
               </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <button
+                  onClick={() => setBucketMenuOpen((v) => !v)}
+                  className="flex h-8 w-full items-center justify-between gap-1 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--card)] px-2.5 text-xs font-medium"
+                >
+                  <span className="truncate">{activeBucket?.name ?? "Select bucket"}</span>
+                  <CaretDownIcon size={12} className="shrink-0 text-[var(--muted-foreground)]" />
+                </button>
+                {bucketMenuOpen && (
+                  <div className="absolute left-0 top-9 z-10 w-full animate-in overflow-hidden rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] shadow-[var(--shadow-popover)]">
+                    {buckets.map((b) => (
+                      <button
+                        key={b.id}
+                        onClick={() => {
+                          setBucketId(b.id);
+                          setPrefs({ lastBucketId: b.id });
+                          setBucketMenuOpen(false);
+                        }}
+                        className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs hover:bg-[var(--secondary)] ${
+                          b.id === bucketId ? "font-semibold text-[var(--primary)]" : ""
+                        }`}
+                      >
+                        {b.name}
+                        {b.isDefault && <span className="text-[10px] text-[var(--muted-foreground)]">Default</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setComposerOpen((v) => !v)}
+                className="flex h-8 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--primary)] px-3 text-xs font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)]"
+              >
+                <PlusIcon size={13} weight="bold" />
+                Add
+              </button>
             </div>
-          )}
 
-          <div className="relative">
-            <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search your memories…"
-              className="h-8 w-full rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--card)] pl-8 pr-2 text-xs outline-none focus:border-[var(--primary)]"
-            />
+            {composerOpen && (
+              <div className="flex animate-in flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-2.5 shadow-[var(--shadow-card)]">
+                <textarea
+                  autoFocus
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveDraft();
+                    if (e.key === "Escape") setComposerOpen(false);
+                  }}
+                  placeholder="Write something to remember…"
+                  rows={3}
+                  className="resize-none rounded-[var(--radius-sm)] bg-transparent text-xs outline-none placeholder:text-[var(--muted-foreground)]"
+                />
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-[var(--muted-foreground)]">
+                    Saves to <span className="font-medium">{activeBucket?.name ?? "default"}</span>
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setComposerOpen(false);
+                        setDraft("");
+                      }}
+                      className="rounded-full px-2.5 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={saveDraft}
+                      disabled={!draft.trim() || saving}
+                      className="rounded-full bg-[var(--primary)] px-3 py-1 text-xs font-medium text-[var(--primary-foreground)] disabled:opacity-50"
+                    >
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="relative">
+              <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search your memories…"
+                className="h-8 w-full rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--card)] pl-8 pr-2 text-xs outline-none focus:border-[var(--primary)]"
+              />
+            </div>
+
+            <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto pr-0.5">
+              {memoriesLoading ? (
+                <div className="flex flex-col gap-1.5">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="h-12 animate-pulse rounded-[var(--radius-md)] bg-[var(--secondary)]" />
+                  ))}
+                </div>
+              ) : memories.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 py-8 text-center">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--secondary)]">
+                    <BrainIcon size={18} className="text-[var(--muted-foreground)]" />
+                  </div>
+                  <p className="text-xs font-medium">{query ? "No matches" : "No memories yet"}</p>
+                  <p className="max-w-[220px] text-[11px] text-[var(--muted-foreground)]">
+                    {query
+                      ? "Try a different search term, or clear it to see everything in this bucket."
+                      : "Select text on any page, or use Add above, to start building your memory."}
+                  </p>
+                </div>
+              ) : (
+                memories.map((m) => (
+                  <div
+                    key={m.id}
+                    className="group flex items-start gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-2.5 text-xs shadow-[var(--shadow-card)]"
+                  >
+                    <div className="flex flex-1 flex-col gap-1">
+                      <span className="line-clamp-3 leading-relaxed">{m.content}</span>
+                      <div className="flex items-center gap-1.5">
+                        <SourceBadge source={m.source} />
+                        <span className="text-[10px] text-[var(--muted-foreground)]">{relativeTime(m.createdAt)}</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        await sendToBackground({ type: "DELETE_MEMORY", id: m.id });
+                        setMemories((prev) => prev.filter((x) => x.id !== m.id));
+                      }}
+                      className="shrink-0 rounded-full p-1 text-[var(--muted-foreground)] opacity-0 transition-opacity hover:bg-[var(--destructive-foreground)] hover:text-[var(--destructive)] group-hover:opacity-100"
+                      aria-label="Delete memory"
+                    >
+                      <TrashIcon size={13} />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
+        )}
 
-          <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto pr-0.5">
-            {memoriesLoading ? (
-              <div className="flex flex-col gap-1.5">
-                {[0, 1, 2].map((i) => (
-                  <div key={i} className="h-12 animate-pulse rounded-[var(--radius-md)] bg-[var(--secondary)]" />
+        {tab === "sync" && <SyncTab />}
+        {tab === "history" && <HistoryTab />}
+        {tab === "account" && <AccountTab account={account} onDisconnect={onDisconnect} />}
+
+        {tab === "settings" && (
+          <div className="flex flex-col gap-5 p-4 text-sm">
+            <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-3">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-xs font-semibold">Smart Mode</span>
+                <span className="text-[11px] leading-snug text-[var(--muted-foreground)]">
+                  Automatically pick the most relevant memories to inject into context.
+                </span>
+              </div>
+              <Toggle
+                checked={account.smartMemoryEnabled}
+                onChange={async (v) => {
+                  await sendToBackground({ type: "UPDATE_SMART_MEMORY", enabled: v });
+                  setAccount({ ...account, smartMemoryEnabled: v });
+                }}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-3">
+              <div className="flex flex-col gap-0.5">
+                <span className="flex items-center gap-1.5 text-xs font-semibold">
+                  <ArrowsClockwiseIcon size={13} />
+                  Auto-inject countdown
+                </span>
+                <span className="text-[11px] leading-snug text-[var(--muted-foreground)]">
+                  Quick Inject auto-selects everything and injects after 5 seconds unless you cancel, instead of
+                  requiring a manual click.
+                </span>
+              </div>
+              <Toggle
+                checked={autoInjectCountdown}
+                onChange={async (v) => {
+                  setAutoInjectCountdown(v);
+                  await setPrefs({ autoInjectCountdown: v });
+                }}
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+                Auto-capture per platform
+              </span>
+              <div className="flex flex-col gap-1 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-1">
+                {CAPTURE_PLATFORMS.map((platform, i) => (
+                  <div
+                    key={platform}
+                    className={`flex items-center justify-between px-2 py-2 ${i > 0 ? "border-t border-[var(--border)]" : ""}`}
+                  >
+                    <span className="text-xs">{PLATFORM_LABEL[platform]}</span>
+                    <Toggle
+                      checked={account.autoCapture[platform] ?? true}
+                      onChange={async (v) => {
+                        const next = { ...account.autoCapture, [platform]: v };
+                        await sendToBackground({ type: "UPDATE_AUTO_CAPTURE", autoCapture: next });
+                        setAccount({ ...account, autoCapture: next });
+                      }}
+                    />
+                  </div>
                 ))}
               </div>
-            ) : memories.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 py-8 text-center">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--secondary)]">
-                  <BrainIcon size={18} className="text-[var(--muted-foreground)]" />
-                </div>
-                <p className="text-xs font-medium">{query ? "No matches" : "No memories yet"}</p>
-                <p className="max-w-[220px] text-[11px] text-[var(--muted-foreground)]">
-                  {query
-                    ? "Try a different search term, or clear it to see everything in this bucket."
-                    : "Select text on any page, or use Add above, to start building your memory."}
-                </p>
-              </div>
-            ) : (
-              memories.map((m) => (
-                <div
-                  key={m.id}
-                  className="group flex items-start gap-2 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-2.5 text-xs shadow-[var(--shadow-card)]"
-                >
-                  <div className="flex flex-1 flex-col gap-1">
-                    <span className="line-clamp-3 leading-relaxed">{m.content}</span>
-                    <div className="flex items-center gap-1.5">
-                      <SourceBadge source={m.source} />
-                      <span className="text-[10px] text-[var(--muted-foreground)]">{relativeTime(m.createdAt)}</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      await sendToBackground({ type: "DELETE_MEMORY", id: m.id });
-                      setMemories((prev) => prev.filter((x) => x.id !== m.id));
-                    }}
-                    className="shrink-0 rounded-full p-1 text-[var(--muted-foreground)] opacity-0 transition-opacity hover:bg-[var(--destructive-foreground)] hover:text-[var(--destructive)] group-hover:opacity-100"
-                    aria-label="Delete memory"
-                  >
-                    <TrashIcon size={13} />
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-5 p-4 text-sm">
-          <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-3">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-xs font-semibold">Smart Mode</span>
-              <span className="text-[11px] leading-snug text-[var(--muted-foreground)]">
-                Automatically pick the most relevant memories to inject into context.
-              </span>
             </div>
-            <Toggle
-              checked={account.smartMemoryEnabled}
-              onChange={async (v) => {
-                await sendToBackground({ type: "UPDATE_SMART_MEMORY", enabled: v });
-                setAccount({ ...account, smartMemoryEnabled: v });
+
+            <button
+              onClick={async () => {
+                await sendToBackground({ type: "REPLAY_ONBOARDING" });
+                onReplayOnboarding();
               }}
-            />
+              className="rounded-full border border-[var(--border)] px-3 py-2 text-xs text-[var(--foreground)]"
+            >
+              Replay walkthrough
+            </button>
           </div>
+        )}
+      </div>
 
-          <div className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-              Auto-capture per platform
-            </span>
-            <div className="flex flex-col gap-1 rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--card)] p-1">
-              {["chatgpt", "claude", "gemini"].map((platform, i) => (
-                <div
-                  key={platform}
-                  className={`flex items-center justify-between px-2 py-2 capitalize ${
-                    i > 0 ? "border-t border-[var(--border)]" : ""
-                  }`}
-                >
-                  <span className="text-xs">{platform === "chatgpt" ? "ChatGPT" : platform}</span>
-                  <Toggle
-                    checked={account.autoCapture[platform] ?? true}
-                    onChange={async (v) => {
-                      const next = { ...account.autoCapture, [platform]: v };
-                      await sendToBackground({ type: "UPDATE_AUTO_CAPTURE", autoCapture: next });
-                      setAccount({ ...account, autoCapture: next });
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <button
-            onClick={async () => {
-              await sendToBackground({ type: "REPLAY_ONBOARDING" });
-              onReplayOnboarding();
-            }}
-            className="rounded-full border border-[var(--border)] px-3 py-2 text-xs text-[var(--foreground)]"
-          >
-            Replay walkthrough
-          </button>
-          <button
-            onClick={onDisconnect}
-            className="mt-1 flex items-center justify-center gap-1.5 rounded-full border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--destructive)] hover:bg-[var(--destructive-foreground)]"
-          >
-            <SignOutIcon size={13} />
-            Disconnect extension
-          </button>
-        </div>
-      )}
+      <div className="flex items-center border-t border-[var(--border)]">
+        <TabButton active={tab === "memories"} onClick={() => setTab("memories")} icon={<StackIcon size={16} />} label="Memories" />
+        <TabButton active={tab === "sync"} onClick={() => setTab("sync")} icon={<ArrowsClockwiseIcon size={16} />} label="Sync" />
+        <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={<ClockCounterClockwiseIcon size={16} />} label="History" />
+        <TabButton active={tab === "account"} onClick={() => setTab("account")} icon={<UserCircleIcon size={16} />} label="Account" />
+        <TabButton active={tab === "settings"} onClick={() => setTab("settings")} icon={<GearSixIcon size={16} />} label="Settings" />
+      </div>
     </div>
   );
 }

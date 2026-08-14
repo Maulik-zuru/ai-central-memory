@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { sendToBackground } from "../lib/messages";
 import type { SiteAdapter } from "../lib/site-adapters";
 import type { Bucket, ContextPreview, Suggestion } from "../lib/types";
-import { getPrefs } from "../lib/storage";
+import { getPrefs, setPrefs } from "../lib/storage";
+import { extractMarkerLineMemory, MARKER_LINE_INSTRUCTION } from "../lib/marker-line";
 
 type SelectionState = { text: string; x: number; y: number } | null;
 type ToastState = string | null;
@@ -24,6 +25,31 @@ async function pollForNewCaptureSuggestion(
   return null;
 }
 
+// Phase 22 (MemoryPlugin_Clone_Spec.md §5.4 "online sync — no export file needed"): pushes the
+// whole visible transcript so far into the chat-history archive, upserted by the page's own
+// conversation id. Only fires for adapters with real transcript access — `getAllTurns()` is
+// deliberately empty for marker-line-only platforms (see marker-line-adapter.ts) — and only once
+// the user has opted in, since a whole-conversation transcript is a bigger data-collection step
+// than the extracted individual memories the rest of this app deals in.
+async function pushConversationToHistory(adapter: SiteAdapter): Promise<void> {
+  const messages = adapter.getAllTurns();
+  if (messages.length === 0) return;
+  const conversationId = adapter.getConversationId();
+  if (!conversationId) return;
+
+  const prefs = await getPrefs();
+  if (!prefs.chatHistorySyncEnabled || !prefs.lastBucketId) return;
+
+  await sendToBackground({
+    type: "INGEST_CONVERSATION",
+    bucketId: prefs.lastBucketId,
+    platform: adapter.name,
+    conversationId,
+    title: adapter.getConversationTitle() ?? "Untitled conversation",
+    messages,
+  });
+}
+
 export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
   const [quickInjectOpen, setQuickInjectOpen] = useState(false);
   const [preview, setPreview] = useState<ContextPreview | null>(null);
@@ -35,6 +61,21 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
   const [selection, setSelection] = useState<SelectionState>(null);
   const [toast, setToast] = useState<ToastState>(null);
   const [pendingSuggestion, setPendingSuggestion] = useState<Suggestion | null>(null);
+  // Phase 22: seconds remaining in the auto-inject countdown, or null when not counting down —
+  // behind a setting, default off (see storage.ts's Prefs.autoInjectCountdown) until verified.
+  const [countdown, setCountdown] = useState<number | null>(null);
+  // Phase 22 (MemoryPlugin_Clone_Spec.md §4.1 "floating draggable button with remembered per-site
+  // position"): null means "use the original fixed bottom/right spot" — only set once the user
+  // has actually dragged the button at least once on this site.
+  const [buttonPos, setButtonPos] = useState<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
+
+  useEffect(() => {
+    getPrefs().then((prefs) => {
+      const saved = prefs.buttonPosition?.[adapter.name];
+      if (saved) setButtonPos(saved);
+    });
+  }, [adapter]);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -42,11 +83,15 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
   }, []);
 
   // Text-selection "Save to Memory" affordance (US-MEM-02: exact text, no rewriting, <2s).
+  // Phase 22: threshold lowered from 8 to 3 chars per MemoryPlugin_Clone_Spec.md's own minimum —
+  // "Save to Memory" is kept as this label (not renamed) since it's already this product's own
+  // established name for the action, used identically elsewhere (the dashboard's capture card,
+  // the popup's composer, and this same toast's wording all already say "Save"/"Saved to memory").
   useEffect(() => {
     function onMouseUp() {
       const sel = window.getSelection();
       const text = sel?.toString().trim();
-      if (!text || text.length < 8) {
+      if (!text || text.length < 3) {
         setSelection(null);
         return;
       }
@@ -68,6 +113,17 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
   // a timestamp comparison, since the extension's clock and the server's can drift.
   useEffect(() => {
     const unobserve = adapter.observeNewTurns(async (text) => {
+      // Phase 22: marker-line — a second, complementary capture signal alongside the full-turn
+      // capture below, both routing through the same CAPTURE pipeline unchanged
+      // (MemoryPlugin_Parity_Implementation_Plan.md Phase 22 §2, "no new capture semantics").
+      // Fire-and-forget: a missing marker is the overwhelmingly common case and must never delay
+      // or block the turn's own capture.
+      const markerMemory = extractMarkerLineMemory(text);
+      if (markerMemory) {
+        void sendToBackground({ type: "CAPTURE", snippet: markerMemory, platform: adapter.name }).catch(() => {});
+      }
+      void pushConversationToHistory(adapter).catch(() => {});
+
       try {
         const before = await sendToBackground<{ suggestions: Suggestion[] }>({ type: "GET_PENDING_SUGGESTIONS" });
         const knownIds = new Set(before.suggestions.map((s) => s.id));
@@ -87,11 +143,37 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
     return unobserve;
   }, [adapter]);
 
+  // Phase 22: injects the marker-line instruction once per conversation, only while the composer
+  // is empty (never interleaves with text the user is actively typing). Polls rather than hooking
+  // a platform-specific "submit" event, since none of the adapters expose one and intercepting
+  // send across five different composers is far more invasive than reusing the same injectText()
+  // Quick Inject already uses. `lastInjectedKeyRef` re-arms whenever the page's own conversation
+  // id (or, before one exists, the URL) changes, so a second new chat in the same tab gets its
+  // own injection.
+  //
+  // NOT YET LIVE-VERIFIED (see lib/marker-line.ts's module comment) — the polling cadence and
+  // "composer must be empty" gate are a best-effort design pending real-session confirmation that
+  // this doesn't surprise or interrupt anyone.
+  useEffect(() => {
+    const lastInjectedKeyRef = { current: "" };
+    function maybeInject() {
+      const key = adapter.getConversationId() ?? location.href;
+      if (key === lastInjectedKeyRef.current) return;
+      if (adapter.getComposerText().length > 0) return;
+      lastInjectedKeyRef.current = key;
+      adapter.injectText(MARKER_LINE_INSTRUCTION);
+    }
+    maybeInject();
+    const interval = setInterval(maybeInject, 1500);
+    return () => clearInterval(interval);
+  }, [adapter]);
+
   async function openQuickInject() {
     setQuickInjectOpen(true);
     setPreviewLoading(true);
     setSelectedIds(new Set());
     setInjectFilter("");
+    setCountdown(null);
     try {
       const { buckets } = await sendToBackground<{ buckets: Bucket[] }>({ type: "GET_BUCKETS" });
       setBuckets(buckets);
@@ -101,12 +183,20 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
       const snippet = adapter.getLastAssistantTurn() || adapter.getComposerText() || "conversation context";
       const result = await sendToBackground<ContextPreview>({ type: "PREVIEW_CONTEXT", snippet, bucketId: selectedBucket });
       setPreview(result);
+      // Phase 22: the countdown is an alternative to fully-manual click-to-inject, not a change to
+      // it — everything preview surfaces gets pre-selected and a 5s cancellable countdown starts;
+      // cancelling (or unchecking anything) just leaves the panel in ordinary manual mode.
+      if (prefs.autoInjectCountdown && result.memories.length > 0) {
+        setSelectedIds(new Set(result.memories.map((m) => m.id)));
+        setCountdown(5);
+      }
     } finally {
       setPreviewLoading(false);
     }
   }
 
   function toggleMemory(id: string) {
+    setCountdown(null);
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -122,8 +212,24 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
     const contextText = selected.map((m) => `- ${m.content}`).join("\n");
     adapter.injectText(`Context from my memory:\n${contextText}\n\n`);
     setQuickInjectOpen(false);
+    setCountdown(null);
     showToast("Context injected");
   }
+
+  // Phase 22: ref mirror of confirmInject so the countdown effect below always calls the latest
+  // closure (current preview/selectedIds) without re-running itself on every unrelated re-render.
+  const confirmInjectRef = useRef(confirmInject);
+  confirmInjectRef.current = confirmInject;
+
+  useEffect(() => {
+    if (countdown === null || countdown <= 0) return;
+    const timer = setTimeout(() => setCountdown((c) => (c === null ? null : c - 1)), 1000);
+    return () => clearTimeout(timer);
+  }, [countdown]);
+
+  useEffect(() => {
+    if (countdown === 0) confirmInjectRef.current();
+  }, [countdown]);
 
   async function saveSelection() {
     if (!selection) return;
@@ -133,9 +239,50 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
     showToast("Saved to memory");
   }
 
+  // Phase 22: a pointer-drag distance under this threshold is treated as a click (opens Quick
+  // Inject) rather than a drag — same idea as any draggable-vs-clickable UI element.
+  const DRAG_THRESHOLD_PX = 4;
+
+  function handleButtonPointerDown(e: React.PointerEvent<HTMLButtonElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    dragRef.current = { startX: e.clientX, startY: e.clientY, originX: buttonPos?.x ?? rect.left, originY: buttonPos?.y ?? rect.top, moved: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function handleButtonPointerMove(e: React.PointerEvent<HTMLButtonElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const dx = e.clientX - drag.startX;
+    const dy = e.clientY - drag.startY;
+    if (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX) drag.moved = true;
+    if (drag.moved) setButtonPos({ x: drag.originX + dx, y: drag.originY + dy });
+  }
+
+  async function handleButtonPointerUp() {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag) return;
+    if (!drag.moved) {
+      openQuickInject();
+      return;
+    }
+    setButtonPos((pos) => {
+      if (pos) {
+        getPrefs().then((prefs) => setPrefs({ buttonPosition: { ...prefs.buttonPosition, [adapter.name]: pos } }));
+      }
+      return pos;
+    });
+  }
+
   return (
     <>
-      <button className="quick-inject-btn" style={{ bottom: 96, right: 24 }} onClick={openQuickInject}>
+      <button
+        className="quick-inject-btn"
+        style={buttonPos ? { left: buttonPos.x, top: buttonPos.y } : { bottom: 96, right: 24 }}
+        onPointerDown={handleButtonPointerDown}
+        onPointerMove={handleButtonPointerMove}
+        onPointerUp={handleButtonPointerUp}
+      >
         <span className="badge-dot">✦</span>
         Quick Inject
       </button>
@@ -171,6 +318,15 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
                 </option>
               ))}
             </select>
+          )}
+
+          {countdown !== null && (
+            <div className="panel-stat" style={{ marginBottom: 8 }}>
+              <span className="panel-muted">Auto-injecting in {countdown}s…</span>
+              <button className="link-btn" style={{ marginLeft: "auto" }} onClick={() => setCountdown(null)}>
+                Cancel
+              </button>
+            </div>
           )}
 
           {previewLoading || !preview ? (

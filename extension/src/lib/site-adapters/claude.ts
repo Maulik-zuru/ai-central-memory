@@ -42,4 +42,24 @@ export const claudeAdapter: SiteAdapter = {
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
   },
+
+  // Phase 22: Claude's started conversations live at `/chat/<uuid>`; a bare `/new` or root has no
+  // id yet — best-effort, unverified live.
+  getConversationId() {
+    return location.pathname.match(/\/chat\/([\w-]+)/)?.[1] ?? null;
+  },
+
+  getConversationTitle() {
+    return document.title.replace(/\s*[|\-–]\s*Claude\s*$/i, "").trim() || null;
+  },
+
+  getAllTurns() {
+    const nodes = document.querySelectorAll<HTMLElement>('[data-testid="user-turn"], [data-testid="assistant-turn"]');
+    return Array.from(nodes)
+      .map((el) => ({
+        role: el.getAttribute("data-testid") === "user-turn" ? ("user" as const) : ("assistant" as const),
+        content: el.textContent?.trim() ?? "",
+      }))
+      .filter((t) => t.content.length > 0);
+  },
 };

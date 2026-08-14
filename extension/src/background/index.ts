@@ -76,6 +76,18 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
 
     case "REPLAY_ONBOARDING":
       return replayOnboarding();
+
+    case "INGEST_CONVERSATION":
+      return backgroundApi.ingestConversation(
+        message.bucketId,
+        message.platform,
+        message.conversationId,
+        message.title,
+        message.messages,
+      );
+
+    case "GET_CONVERSATIONS":
+      return backgroundApi.getConversations();
   }
 }
 

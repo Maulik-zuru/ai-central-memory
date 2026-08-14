@@ -27,7 +27,20 @@ export type ExtensionMessage =
   | { type: "DELETE_MEMORY"; id: string }
   | { type: "GET_ONBOARDING_STATE" }
   | { type: "DISMISS_ONBOARDING" }
-  | { type: "REPLAY_ONBOARDING" };
+  | { type: "REPLAY_ONBOARDING" }
+  // Phase 22 (MemoryPlugin_Clone_Spec.md §5.4 "online sync — no export file needed"): pushes the
+  // active tab's conversation transcript into the chat-history archive via the same
+  // ingest/custom-online endpoint the programmatic API uses — upserted by conversationId, so
+  // re-sending the same conversation as it grows never duplicates.
+  | {
+      type: "INGEST_CONVERSATION";
+      bucketId: string;
+      platform: string;
+      conversationId: string;
+      title: string;
+      messages: { role: "user" | "assistant"; content: string }[];
+    }
+  | { type: "GET_CONVERSATIONS" };
 
 export type ExtensionResponse<T = unknown> = { ok: true; data: T } | { ok: false; error: string };
 

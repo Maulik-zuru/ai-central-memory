@@ -7,8 +7,18 @@ const SESSION_KEY = "apiKey";
 const PENDING_PAIRING_KEY = "pendingPairing";
 const LOCAL_PREFS_KEY = "prefs";
 
-interface Prefs {
+export interface Prefs {
   lastBucketId?: string;
+  // Phase 22: off by default until the countdown UX is verified not to surprise users (the plan's
+  // own delivery order calls this out explicitly), so its absence must read as "off," not "on."
+  autoInjectCountdown?: boolean;
+  // Phase 22: whole-conversation chat-history capture is a bigger data-collection step than
+  // extracting individual memories — opt-in, off by default, toggled from the popup's Sync tab.
+  chatHistorySyncEnabled?: boolean;
+  // Phase 22: the floating button's remembered position, keyed by SiteAdapter.name — a flat
+  // Prefs merge (see setPrefs below) can't deep-merge this, so callers read-modify-write the
+  // whole map themselves (e.g. `setPrefs({ buttonPosition: { ...current.buttonPosition, [site]: pos } })`).
+  buttonPosition?: Record<string, { x: number; y: number }>;
 }
 
 // A pairing attempt in flight, persisted so it survives the action popup closing — which Chrome

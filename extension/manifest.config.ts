@@ -23,7 +23,16 @@ export default defineManifest({
   },
   content_scripts: [
     {
-      matches: ['https://chatgpt.com/*', 'https://chat.openai.com/*', 'https://claude.ai/*', 'https://gemini.google.com/*'],
+      // Phase 22: Grok and DeepSeek added as marker-line-only platforms — narrowly scoped to
+      // their own domains (not the shared x.com origin, which would run this on all of Twitter/X).
+      matches: [
+        'https://chatgpt.com/*',
+        'https://chat.openai.com/*',
+        'https://claude.ai/*',
+        'https://gemini.google.com/*',
+        'https://grok.com/*',
+        'https://chat.deepseek.com/*',
+      ],
       js: ['src/content/index.tsx'],
       run_at: 'document_idle',
     },

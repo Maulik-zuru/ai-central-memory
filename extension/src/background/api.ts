@@ -5,6 +5,7 @@ import type {
   ApiKeySummary,
   Bucket,
   ContextPreview,
+  ConversationSummary,
   Memory,
   PairingStartResult,
   PairingStatus,
@@ -88,4 +89,21 @@ export const backgroundApi = {
   listApiKeys: () => apiFetch<{ apiKeys: ApiKeySummary[] }>("/api/keys"),
 
   revokeApiKey: (apiKeyId: string) => apiFetch<void>(`/api/keys/${apiKeyId}`, { method: "DELETE" }),
+
+  // Phase 22: same upsert-by-conversation.id contract the programmatic API uses (Phase 15) —
+  // re-sending the same conversationId as it grows updates in place, never duplicates. bucketId
+  // is required by the endpoint itself (chat-history.types.ts's ingestCustomOnlineSchema).
+  ingestConversation: (
+    bucketId: string,
+    platform: string,
+    conversationId: string,
+    title: string,
+    messages: { role: "user" | "assistant"; content: string }[],
+  ) =>
+    apiFetch<{ status: "queued" | "skipped" }>("/api/chat-history/ingest/custom-online", {
+      method: "POST",
+      body: JSON.stringify({ bucketId, platform, conversation: { id: conversationId, title, messages } }),
+    }),
+
+  getConversations: () => apiFetch<{ items: ConversationSummary[] }>("/api/chat-history/conversations?limit=20"),
 };

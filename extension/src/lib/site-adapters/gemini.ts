@@ -44,4 +44,24 @@ export const geminiAdapter: SiteAdapter = {
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
   },
+
+  // Phase 22: a started Gemini conversation lives at `/app/<hash>`; the new-chat screen (bare
+  // `/app` or root) has none yet — best-effort, unverified live.
+  getConversationId() {
+    return location.pathname.match(/\/app\/([\w-]+)/)?.[1] ?? null;
+  },
+
+  getConversationTitle() {
+    return document.title.replace(/\s*[|\-–]\s*Gemini\s*$/i, "").trim() || null;
+  },
+
+  getAllTurns() {
+    const nodes = document.querySelectorAll<HTMLElement>("user-query, model-response, [data-response-index]");
+    return Array.from(nodes)
+      .map((el) => ({
+        role: el.tagName.toLowerCase() === "user-query" ? ("user" as const) : ("assistant" as const),
+        content: el.textContent?.trim() ?? "",
+      }))
+      .filter((t) => t.content.length > 0);
+  },
 };

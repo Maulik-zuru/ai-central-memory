@@ -34,12 +34,13 @@ export const SHADOW_STYLES = `
   color: var(--foreground);
   font-size: 13px;
   font-weight: 500;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   box-shadow: 0 4px 16px rgba(25, 27, 34, 0.12);
-  transition: transform 150ms ease, box-shadow 150ms ease;
+  transition: box-shadow 150ms ease;
 }
-.quick-inject-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(25, 27, 34, 0.16); }
-.quick-inject-btn:active { transform: scale(0.98); }
+.quick-inject-btn:hover { box-shadow: 0 6px 20px rgba(25, 27, 34, 0.16); }
+.quick-inject-btn:active { cursor: grabbing; }
 
 .quick-inject-btn .badge-dot {
   display: flex;

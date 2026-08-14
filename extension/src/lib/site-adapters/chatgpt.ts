@@ -46,4 +46,24 @@ export const chatGptAdapter: SiteAdapter = {
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
   },
+
+  // Phase 22: ChatGPT gives every started conversation a `/c/<uuid>` path; the new-chat screen
+  // (bare origin, or `/?...` with no `/c/` segment) has none yet — best-effort, unverified live.
+  getConversationId() {
+    return location.pathname.match(/\/c\/([\w-]+)/)?.[1] ?? null;
+  },
+
+  getConversationTitle() {
+    return document.title.replace(/\s*[|\-–]\s*ChatGPT\s*$/i, "").trim() || null;
+  },
+
+  getAllTurns() {
+    const nodes = document.querySelectorAll<HTMLElement>("[data-message-author-role]");
+    return Array.from(nodes)
+      .map((el) => ({
+        role: el.getAttribute("data-message-author-role") === "user" ? ("user" as const) : ("assistant" as const),
+        content: el.textContent?.trim() ?? "",
+      }))
+      .filter((t) => t.content.length > 0);
+  },
 };
