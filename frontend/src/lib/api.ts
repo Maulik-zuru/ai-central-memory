@@ -62,6 +62,7 @@ export interface Memory {
   source: "manual" | "one_click" | "auto";
   status: "active" | "stale" | "merged" | "deleted";
   mergedIntoId: string | null;
+  supersedesId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -82,7 +83,9 @@ export interface MemoryVersion {
 
 export interface Suggestion {
   id: string;
-  type: "duplicate" | "stale" | "capture";
+  // "stale" is the pre-Phase-18 generic type, still handled for any suggestion created before
+  // ADR-0003's replaces/extends classification landed — new detections are always one of those two.
+  type: "duplicate" | "stale" | "replaces" | "extends" | "capture";
   memoryIdA: string | null;
   memoryIdB: string | null;
   draftContent: string | null;

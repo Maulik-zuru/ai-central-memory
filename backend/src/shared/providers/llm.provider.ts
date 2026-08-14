@@ -84,6 +84,13 @@ export interface LlmProvider {
     chunks: { id: string; content: string }[],
     opts: { tokenBudget: number; priorSummary?: string },
   ): Promise<{ summary: string; citedIds: string[] }>;
+  /**
+   * Phase 18 (ADR-0003 "supersedes relation"): of a stale-candidate pair (the same fact,
+   * mid-similarity band), does the newer memory genuinely contradict the older one ("replaces"),
+   * or merely add detail without invalidating it ("extends")? The distance-band membership check
+   * alone was never sufficient to tell these apart — this is the judgment call that was missing.
+   */
+  classifyStaleness(olderContent: string, newerContent: string): Promise<'replaces' | 'extends'>;
 }
 
 export interface EntityExtractionResult {
@@ -219,6 +226,20 @@ function stubSummarizeWithCitations(
   return { summary: `No LLM configured — showing the most relevant passages verbatim: ${parts.join(' / ')}`, citedIds };
 }
 
+// Stub staleness classification: no LLM configured, so this looks for the same surface cues a
+// genuine correction tends to use ("now", "actually", "no longer", ...) rather than pretending to
+// judge meaning — same honesty bar every other stub in this file sets. Good enough to exercise
+// "replaces deactivates the old memory, extends doesn't" end to end without a network call; a real
+// provider does the actual semantic judgment behind the identical signature.
+const CONTRADICTION_CUES = [
+  'now', 'instead', 'actually', 'no longer', 'moved', 'changed', 'updated', 'used to', "isn't", 'not anymore',
+];
+
+function stubClassifyStaleness(_olderContent: string, newerContent: string): 'replaces' | 'extends' {
+  const lower = newerContent.toLowerCase();
+  return CONTRADICTION_CUES.some((cue) => lower.includes(cue)) ? 'replaces' : 'extends';
+}
+
 const EMBEDDING_DIM = 1536;
 
 /**
@@ -303,6 +324,17 @@ function parseSummaryReply(reply: string, chunks: { id: string; content: string 
   return { summary, citedIds };
 }
 
+// Phase 18 (ADR-0003): a malformed-but-present classification reply (the call succeeded, the
+// content just wasn't exactly REPLACES/EXTENDS) is a data-quality issue, not an infra failure —
+// falls back to the same surface-cue heuristic the stub provider uses, rather than throwing.
+function parseStalenessReply(reply: string, olderContent: string, newerContent: string): 'replaces' | 'extends' {
+  const normalized = reply.trim().toUpperCase();
+  if (normalized.startsWith('REPLACES')) return 'replaces';
+  if (normalized.startsWith('EXTENDS')) return 'extends';
+  logger.error('Staleness-classification reply was not in the expected format; using the surface-cue heuristic');
+  return stubClassifyStaleness(olderContent, newerContent);
+}
+
 export const stubLlmProvider: LlmProvider = {
   async extractMemoryCandidates(snippet: string) {
     return stubExtract(snippet);
@@ -333,6 +365,9 @@ export const stubLlmProvider: LlmProvider = {
   },
   async summarizeWithCitations(_query, chunks, opts) {
     return stubSummarizeWithCitations(chunks, opts);
+  },
+  async classifyStaleness(olderContent, newerContent) {
+    return stubClassifyStaleness(olderContent, newerContent);
   },
 };
 
@@ -521,6 +556,22 @@ export class AnthropicLlmProvider implements LlmProvider {
       opts.tokenBudget + 50,
     );
     return parseSummaryReply(res, chunks);
+  }
+
+  // Phase 18 (ADR-0003): a genuine contradiction ("replaces") vs. an addition that doesn't
+  // invalidate anything ("extends") — see parseStalenessReply's comment for how a malformed reply
+  // degrades, and this class's shared comment above `complete()` for why a real call failure
+  // throws rather than substituting a guess.
+  async classifyStaleness(olderContent: string, newerContent: string): Promise<'replaces' | 'extends'> {
+    const res = await this.complete(
+      'You are given an older memory and a newer one about the same topic. Decide whether the ' +
+        'newer one genuinely CONTRADICTS the older one (a fact changed — reply "REPLACES"), or ' +
+        'merely ADDS detail without invalidating the older one (reply "EXTENDS"). Reply with ' +
+        'exactly one word, no commentary.',
+      `Older: ${olderContent}\n\nNewer: ${newerContent}`,
+      8,
+    );
+    return parseStalenessReply(res, olderContent, newerContent);
   }
 
   // Phase 18 (§7.4): the one place a real call failure becomes a thrown ProviderError instead of
@@ -747,6 +798,20 @@ export class OpenRouterLlmProvider implements LlmProvider {
     return parseSummaryReply(res, chunks);
   }
 
+  // Phase 18 (ADR-0003) — same "throw on real call failure, degrade to the surface-cue heuristic
+  // on merely-malformed content" discipline as AnthropicLlmProvider's identical method.
+  async classifyStaleness(olderContent: string, newerContent: string): Promise<'replaces' | 'extends'> {
+    const res = await this.complete(
+      'You are given an older memory and a newer one about the same topic. Decide whether the ' +
+        'newer one genuinely CONTRADICTS the older one (a fact changed — reply "REPLACES"), or ' +
+        'merely ADDS detail without invalidating the older one (reply "EXTENDS"). Reply with ' +
+        'exactly one word, no commentary.',
+      `Older: ${olderContent}\n\nNewer: ${newerContent}`,
+      8,
+    );
+    return parseStalenessReply(res, olderContent, newerContent);
+  }
+
   private headers() {
     return {
       'content-type': 'application/json',
@@ -822,6 +887,7 @@ export function getLlmProvider(): LlmProvider {
     expandQuery: (query, now) => extraction.expandQuery(query, now),
     assessChunkRelevance: (query, candidates) => extraction.assessChunkRelevance(query, candidates),
     summarizeWithCitations: (query, chunks, opts) => extraction.summarizeWithCitations(query, chunks, opts),
+    classifyStaleness: (olderContent, newerContent) => extraction.classifyStaleness(olderContent, newerContent),
   };
   return cached;
 }

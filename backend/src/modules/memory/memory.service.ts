@@ -21,6 +21,7 @@ function toPublic(memory: MemoryRecord) {
     source: memory.source,
     status: memory.status,
     mergedIntoId: memory.mergedIntoId,
+    supersedesId: memory.supersedesId,
     createdAt: memory.createdAt,
     updatedAt: memory.updatedAt,
   };

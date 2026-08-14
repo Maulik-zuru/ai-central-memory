@@ -29,7 +29,9 @@ export interface Bucket {
 
 export interface Suggestion {
   id: string;
-  type: "duplicate" | "stale" | "capture";
+  // "stale" is the pre-Phase-18 generic type, still handled for any suggestion created before
+  // ADR-0003's replaces/extends classification landed — new detections are always one of those two.
+  type: "duplicate" | "stale" | "replaces" | "extends" | "capture";
   draftContent: string | null;
   status: "pending" | "approved" | "dismissed";
 }

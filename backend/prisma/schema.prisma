@@ -187,11 +187,20 @@ model Memory {
   mergedIntoId String?
   mergedInto   Memory?                     @relation("MemoryMergedInto", fields: [mergedIntoId], references: [id], onDelete: SetNull)
   mergedFrom   Memory[]                    @relation("MemoryMergedInto")
+  // Phase 18 (ADR-0003): set only when a "replaces" suggestion is approved — a genuine
+  // contradiction ("moved to Lisbon" replacing "lives in Berlin"), not every mid-similarity pair.
+  // Same shape as mergedIntoId/mergedInto/mergedFrom above: SetNull rather than Cascade so a later
+  // hard-delete of the older memory doesn't take this one down with it, walkable both directions
+  // for a future "what did I believe as of last Tuesday" history view.
+  supersedesId String?
+  supersedes   Memory?                     @relation("MemorySupersedes", fields: [supersedesId], references: [id], onDelete: SetNull)
+  supersededBy Memory[]                    @relation("MemorySupersedes")
 
   @@index([userId, status])
   @@index([bucketId])
   @@index([categoryId])
   @@index([mergedIntoId])
+  @@index([supersedesId])
 }
 
 model MemoryVersion {

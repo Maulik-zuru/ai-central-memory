@@ -42,7 +42,10 @@ export const suggestionService = {
         status: 'pending',
         OR: [
           { type: 'capture', userId },
-          { type: { in: ['duplicate', 'stale'] }, memoryIdA: { in: await memoryIdsInBuckets(bucketIds) } },
+          // "stale" is the pre-Phase-18 generic type — kept alongside "replaces"/"extends" (its
+          // Phase 18 replacement, ADR-0003) so any suggestion created before this change still
+          // surfaces; stale-detection.service.ts never creates new "stale" rows going forward.
+          { type: { in: ['duplicate', 'stale', 'replaces', 'extends'] }, memoryIdA: { in: await memoryIdsInBuckets(bucketIds) } },
         ],
       },
       orderBy: { createdAt: 'desc' },
@@ -62,12 +65,23 @@ export const suggestionService = {
       if (suggestion.memoryIdA && suggestion.memoryIdB) {
         await memoryService.merge(userId, suggestion.memoryIdA, suggestion.memoryIdB);
       }
-    } else if (suggestion.type === 'stale') {
+    } else if (suggestion.type === 'stale' || suggestion.type === 'replaces') {
       // The older memory (memoryIdA per stale-detection.service.ts) is marked inactive, not
-      // deleted, and excluded from future retrieval (US-MEM-07 AC).
+      // deleted, and excluded from future retrieval (US-MEM-07 AC). "replaces" additionally
+      // records the pointer (ADR-0003) — the newer memory (memoryIdB) now knows what it
+      // superseded, giving a queryable "what did I believe as of last Tuesday" trail instead of
+      // just an inactive flag. "stale" is the pre-Phase-18 generic type (see listPending's
+      // comment) and gets the deactivation only, since it predates the supersedes relation.
       if (suggestion.memoryIdA) {
         await prisma.memory.update({ where: { id: suggestion.memoryIdA }, data: { status: 'stale' } });
       }
+      if (suggestion.type === 'replaces' && suggestion.memoryIdA && suggestion.memoryIdB) {
+        await prisma.memory.update({ where: { id: suggestion.memoryIdB }, data: { supersedesId: suggestion.memoryIdA } });
+      }
+    } else if (suggestion.type === 'extends') {
+      // Approving an "extends" suggestion is an acknowledgment, not a correction (ADR-0003) — it
+      // deliberately deactivates nothing and sets no supersedes pointer; the two memories are
+      // related, not one superseding the other.
     }
 
     const updated = await prisma.memorySuggestion.update({ where: { id }, data: { status: 'approved' } });

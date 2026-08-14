@@ -75,6 +75,17 @@ describe('LlmProvider — Phase 18 fail-open, never fail-silent (§7.4)', () => 
       await expect(provider.assessChunkRelevance('query', [{ id: 'a', content: 'x' }])).rejects.toThrow(ProviderError);
       await expect(provider.summarizeWithCitations('query', [{ id: 'a', content: 'x' }], { tokenBudget: 100 })).rejects.toThrow(ProviderError);
     });
+
+    it('classifyStaleness throws ProviderError on a failed call', async () => {
+      global.fetch = fakeFetch(500, {}) as unknown as typeof fetch;
+      await expect(provider.classifyStaleness('older', 'newer')).rejects.toThrow(ProviderError);
+    });
+
+    it('classifyStaleness falls back to the surface-cue heuristic (not a throw) on a malformed-but-present reply', async () => {
+      global.fetch = fakeFetch(200, { content: [{ text: 'not REPLACES or EXTENDS' }] }) as unknown as typeof fetch;
+      const result = await provider.classifyStaleness('I live in Berlin.', 'I now live in Lisbon.');
+      expect(result).toBe('replaces');
+    });
   });
 
   describe('OpenRouterLlmProvider', () => {
@@ -93,6 +104,11 @@ describe('LlmProvider — Phase 18 fail-open, never fail-silent (§7.4)', () => 
     it('extractMemoryCandidates throws ProviderError on a failed call', async () => {
       global.fetch = fakeFetch(500, {}) as unknown as typeof fetch;
       await expect(provider.extractMemoryCandidates('snippet')).rejects.toThrow(ProviderError);
+    });
+
+    it('classifyStaleness throws ProviderError on a failed call', async () => {
+      global.fetch = fakeFetch(500, {}) as unknown as typeof fetch;
+      await expect(provider.classifyStaleness('older', 'newer')).rejects.toThrow(ProviderError);
     });
   });
 

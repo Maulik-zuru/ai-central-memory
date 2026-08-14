@@ -60,4 +60,16 @@ describe('LlmProvider — Phase 17 recall-pipeline methods (stub)', () => {
       expect(result.summary).toContain('earlier established fact');
     });
   });
+
+  describe('classifyStaleness (Phase 18.6, ADR-0003)', () => {
+    it('classifies a genuine contradiction as "replaces"', async () => {
+      const result = await provider.classifyStaleness('I live in Berlin.', 'I now live in Lisbon.');
+      expect(result).toBe('replaces');
+    });
+
+    it('classifies a mere addition as "extends"', async () => {
+      const result = await provider.classifyStaleness('My phone number is 555-1000.', 'My work phone number is 555-2000.');
+      expect(result).toBe('extends');
+    });
+  });
 });

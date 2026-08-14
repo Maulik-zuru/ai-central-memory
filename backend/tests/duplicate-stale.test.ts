@@ -84,66 +84,92 @@ describe('Duplicate detection (US-MEM-06)', () => {
   });
 });
 
-describe('Stale detection (US-MEM-07)', () => {
+describe('Stale detection (US-MEM-07) — replaces vs. extends (Phase 18.6, ADR-0003)', () => {
   beforeEach(resetDb);
 
-  it('flags the older memory as stale when a newer one contradicts it', async () => {
+  async function waitForEmbedded(memoryId: string) {
+    return waitFor(() =>
+      prisma
+        .$queryRaw<{ e: boolean }[]>`SELECT embedding IS NOT NULL AS e FROM "Memory" WHERE id = ${memoryId}`
+        .then((r) => r[0]?.e || undefined),
+    );
+  }
+
+  it('flags a genuine contradiction as "replaces", not the old undifferentiated "stale" type', async () => {
     const token = await registerAndGetToken(app, 'hopper@example.com');
     const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
     const userId = account.body.account.id as string;
 
     const olderId = await createMemory(token, 'I live in Berlin.');
-    await waitFor(() =>
-      prisma.$queryRaw<{ e: boolean }[]>`SELECT embedding IS NOT NULL AS e FROM "Memory" WHERE id = ${olderId}`.then(
-        (r) => r[0]?.e || undefined,
-      ),
-    );
+    await waitForEmbedded(olderId);
     await createMemory(token, 'I now live in Lisbon.');
 
-    const suggestion = await waitForSuggestion(userId, 'stale');
+    const suggestion = await waitForSuggestion(userId, 'replaces');
     expect(suggestion.memoryIdA).toBe(olderId);
   });
 
-  it('approving a stale suggestion marks the old memory inactive, not deleted', async () => {
+  it('approving a "replaces" suggestion marks the old memory inactive and sets the new memory\'s supersedesId', async () => {
     const token = await registerAndGetToken(app, 'lovelace@example.com');
     const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
     const userId = account.body.account.id as string;
 
     const olderId = await createMemory(token, 'I live in Berlin.');
-    await waitFor(() =>
-      prisma.$queryRaw<{ e: boolean }[]>`SELECT embedding IS NOT NULL AS e FROM "Memory" WHERE id = ${olderId}`.then(
-        (r) => r[0]?.e || undefined,
-      ),
-    );
-    await createMemory(token, 'I now live in Lisbon.');
+    await waitForEmbedded(olderId);
+    const newerId = await createMemory(token, 'I now live in Lisbon.');
 
-    const suggestion = await waitForSuggestion(userId, 'stale');
+    const suggestion = await waitForSuggestion(userId, 'replaces');
     await request(app).post(`/api/suggestions/${suggestion.id}/approve`).set('Authorization', `Bearer ${token}`);
 
     const old = await prisma.memory.findUnique({ where: { id: olderId } });
     expect(old?.status).toBe('stale');
 
+    const newer = await prisma.memory.findUnique({ where: { id: newerId } });
+    expect(newer?.supersedesId).toBe(olderId);
+
     const list = await request(app).get('/api/memories').set('Authorization', `Bearer ${token}`);
     expect(list.body.items.find((m: { id: string }) => m.id === olderId)).toBeUndefined();
+    // supersedesId is walkable from the surviving memory's own public shape (ADR-0003's "walkable
+    // both directions" consequence, exercised end to end via the REST layer, not just the ORM).
+    expect(list.body.items.find((m: { id: string }) => m.id === newerId)?.supersedesId).toBe(olderId);
   });
 
-  it('dismissing a stale suggestion leaves the old memory active exactly as before', async () => {
+  it('dismissing a "replaces" suggestion leaves the old memory active and sets no supersedesId', async () => {
     const token = await registerAndGetToken(app, 'curie@example.com');
     const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
     const userId = account.body.account.id as string;
 
     const olderId = await createMemory(token, 'I live in Berlin.');
-    await waitFor(() =>
-      prisma.$queryRaw<{ e: boolean }[]>`SELECT embedding IS NOT NULL AS e FROM "Memory" WHERE id = ${olderId}`.then(
-        (r) => r[0]?.e || undefined,
-      ),
-    );
-    await createMemory(token, 'I now live in Lisbon.');
+    await waitForEmbedded(olderId);
+    const newerId = await createMemory(token, 'I now live in Lisbon.');
 
-    const suggestion = await waitForSuggestion(userId, 'stale');
+    const suggestion = await waitForSuggestion(userId, 'replaces');
     await request(app).post(`/api/suggestions/${suggestion.id}/dismiss`).set('Authorization', `Bearer ${token}`);
 
     const old = await prisma.memory.findUnique({ where: { id: olderId } });
     expect(old?.status).toBe('active');
+    const newer = await prisma.memory.findUnique({ where: { id: newerId } });
+    expect(newer?.supersedesId).toBeNull();
+  });
+
+  it('flags a mere addition as "extends", and approving it deactivates nothing', async () => {
+    const token = await registerAndGetToken(app, 'franklin@example.com');
+    const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
+    const userId = account.body.account.id as string;
+
+    const olderId = await createMemory(token, 'My phone number is 555-1000.');
+    await waitForEmbedded(olderId);
+    // No contradiction cue ("now", "instead", "no longer", ...) — an addition, not a correction.
+    const newerId = await createMemory(token, 'My work phone number is 555-2000.');
+
+    const suggestion = await waitForSuggestion(userId, 'extends');
+    expect([suggestion.memoryIdA, suggestion.memoryIdB].sort()).toEqual([olderId, newerId].sort());
+
+    await request(app).post(`/api/suggestions/${suggestion.id}/approve`).set('Authorization', `Bearer ${token}`);
+
+    const older = await prisma.memory.findUnique({ where: { id: olderId } });
+    expect(older?.status).toBe('active');
+    const newer = await prisma.memory.findUnique({ where: { id: newerId } });
+    expect(newer?.status).toBe('active');
+    expect(newer?.supersedesId).toBeNull();
   });
 });
