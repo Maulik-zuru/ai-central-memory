@@ -8,11 +8,13 @@ import { insightService } from './insight.service';
 import { prisma } from '../../shared/prisma';
 import {
   deleteConversationsSchema,
+  excludeConversationsSchema,
   importSchema,
   ingestCustomOnlineSchema,
   injectSchema,
   listConversationsSchema,
   searchSchema,
+  updateConversationSchema,
 } from './chat-history.types';
 
 function requireAuth(req: Request) {
@@ -88,5 +90,19 @@ export const chatHistoryController = {
     const { ids } = deleteConversationsSchema.parse(req.body);
     const result = await conversationService.deleteMany(userId, ids);
     res.status(200).json(result);
+  },
+
+  async excludeConversations(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { ids } = excludeConversationsSchema.parse(req.body);
+    const result = await conversationService.excludeMany(userId, ids);
+    res.status(200).json(result);
+  },
+
+  async updateConversation(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { pinned } = updateConversationSchema.parse(req.body);
+    const conversation = await conversationService.setPinned(userId, req.params.id, pinned);
+    res.status(200).json({ conversation });
   },
 };

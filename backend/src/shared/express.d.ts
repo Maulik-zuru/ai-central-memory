@@ -1,4 +1,5 @@
 import type { Logger } from 'pino';
+import type { BucketRole } from './bucketAccess';
 
 export {};
 
@@ -13,7 +14,7 @@ declare global {
         scopes?: string[];
       };
       log: Logger;
-      bucketRole?: 'viewer' | 'editor' | 'owner';
+      bucketRole?: BucketRole;
     }
   }
 }

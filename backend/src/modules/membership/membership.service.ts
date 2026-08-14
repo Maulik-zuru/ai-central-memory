@@ -22,7 +22,7 @@ async function countOwners(bucketId: string): Promise<number> {
 }
 
 export const membershipService = {
-  async invite(bucketId: string, invitedByUserId: string, email: string, role: 'editor' | 'viewer') {
+  async invite(bucketId: string, invitedByUserId: string, email: string, role: 'contributor' | 'editor' | 'viewer') {
     const bucket = await prisma.bucket.findUniqueOrThrow({ where: { id: bucketId } });
 
     if (!(await hasPlan(invitedByUserId, 'pro'))) {
@@ -96,7 +96,7 @@ export const membershipService = {
     }));
   },
 
-  async changeRole(bucketId: string, targetUserId: string, newRole: 'editor' | 'viewer') {
+  async changeRole(bucketId: string, targetUserId: string, newRole: 'contributor' | 'editor' | 'viewer') {
     const target = await prisma.bucketMember.findUnique({ where: { bucketId_userId: { bucketId, userId: targetUserId } } });
     if (!target) throw AppError.notFound('Member not found');
 

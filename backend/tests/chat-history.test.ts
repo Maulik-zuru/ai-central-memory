@@ -4,6 +4,7 @@ import { disconnect, registerAndGetToken, resetDb, waitFor } from './testUtils';
 import { prisma } from '../src/shared/prisma';
 import { syncService } from '../src/modules/chat-history/sync.service';
 import { insightService } from '../src/modules/chat-history/insight.service';
+import { stubOutbox, clearStubOutbox } from '../src/shared/providers/email.provider';
 
 const app = createApp();
 
@@ -440,9 +441,190 @@ describe('Programmatic ingest and delete (US-INT-06)', () => {
     const gone = await prisma.conversation.findUnique({ where: { id: mine!.id } });
     expect(gone).toBeNull();
     // A future sync/import of the exact same external conversation is free to recreate it — this
-    // is Delete, not the still-unbuilt Exclude, so there is deliberately no placeholder left behind.
+    // is Delete, not Exclude, so there is deliberately no placeholder left behind.
     const stillThere = await prisma.conversation.findUnique({ where: { id: notMineConversation!.id } });
     expect(stillThere).not.toBeNull();
+  });
+});
+
+describe('Chat History Archive — Exclude and pinning (Phase 21, MemoryPlugin_Clone_Spec.md §3.3)', () => {
+  beforeEach(async () => {
+    await resetDb();
+    clearStubOutbox();
+  });
+
+  // Same wait as importAndWait, but keyed on title too — needed whenever a test imports two
+  // conversations into the same bucket+platform, where importAndWait's bucketId+platform-only
+  // lookup can't tell them apart (and might resolve to whichever one finished importing first).
+  async function importAndWaitByTitle(token: string, bucketId: string, platform: string, buffer: Buffer, title: string) {
+    const res = await request(app)
+      .post('/api/chat-history/import')
+      .set('Authorization', `Bearer ${token}`)
+      .field('bucketId', bucketId)
+      .field('platform', platform)
+      .attach('file', buffer, 'export.json');
+    expect(res.status).toBe(202);
+
+    return waitFor(() =>
+      prisma.conversation
+        .findFirst({ where: { bucketId, platform, title } })
+        .then((c) => (c && c.status !== 'importing' ? c : undefined)),
+    );
+  }
+
+  it('excludes a conversation: wipes messages and chunks, keeps a placeholder, never re-imports on a later sync', async () => {
+    const { token, bucketId } = await seedAccount('exclude-a@example.com');
+    const conversation = await importAndWait(
+      token,
+      bucketId,
+      'chatgpt',
+      chatGptExport([{ role: 'user', text: 'exclude me please', epochSec: 1700000000 }]),
+      1,
+    );
+
+    const chunksBefore = await prisma.messageChunk.count({
+      where: { message: { conversationId: conversation!.id } },
+    });
+    expect(chunksBefore).toBeGreaterThan(0);
+
+    const res = await request(app)
+      .post('/api/chat-history/chats/exclude')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: [conversation!.id] });
+    expect(res.status).toBe(200);
+    expect(res.body.excluded).toBe(1);
+
+    const placeholder = await prisma.conversation.findUnique({ where: { id: conversation!.id } });
+    expect(placeholder).not.toBeNull();
+    expect(placeholder!.excludedAt).not.toBeNull();
+    expect(placeholder!.status).toBe('excluded');
+
+    const messagesAfter = await prisma.message.count({ where: { conversationId: conversation!.id } });
+    expect(messagesAfter).toBe(0);
+    const chunksAfter = await prisma.messageChunk.count({
+      where: { message: { conversationId: conversation!.id } },
+    });
+    expect(chunksAfter).toBe(0);
+
+    // Re-importing the exact same export must not resurrect content — this is the whole point
+    // of Exclude over Delete.
+    const reimport = await request(app)
+      .post('/api/chat-history/import')
+      .set('Authorization', `Bearer ${token}`)
+      .field('bucketId', bucketId)
+      .field('platform', 'chatgpt')
+      .attach('file', chatGptExport([{ role: 'user', text: 'exclude me please', epochSec: 1700000000 }]), 'export.json');
+    expect(reimport.status).toBe(202);
+    expect(reimport.body.conversationsQueued).toBe(0);
+
+    await new Promise((r) => setTimeout(r, 200));
+    const stillExcluded = await prisma.conversation.findUnique({ where: { id: conversation!.id } });
+    expect(stillExcluded!.excludedAt).not.toBeNull();
+    expect(await prisma.message.count({ where: { conversationId: conversation!.id } })).toBe(0);
+  });
+
+  it('an excluded conversation never reappears via the programmatic ingest endpoint either', async () => {
+    const { token, bucketId } = await seedAccount('exclude-b@example.com');
+    const body = {
+      bucketId,
+      platform: 'custom-tool',
+      conversation: { id: 'ext-exclude-1', title: 'To be excluded', messages: [{ role: 'user', content: 'hello there' }] },
+    };
+    const first = await request(app).post('/api/chat-history/ingest/custom-online').set('Authorization', `Bearer ${token}`).send(body);
+    expect(first.body.status).toBe('queued');
+    const conversation = await prisma.conversation.findFirst({ where: { bucketId, platform: 'custom-tool' } });
+
+    await request(app).post('/api/chat-history/chats/exclude').set('Authorization', `Bearer ${token}`).send({ ids: [conversation!.id] });
+
+    const second = await request(app)
+      .post('/api/chat-history/ingest/custom-online')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ...body, conversation: { ...body.conversation, title: 'Attempted resurrection' } });
+    expect(second.status).toBe(202);
+    expect(second.body.status).toBe('skipped');
+
+    const unchanged = await prisma.conversation.findUnique({ where: { id: conversation!.id } });
+    expect(unchanged!.title).not.toBe('Attempted resurrection');
+    expect(unchanged!.excludedAt).not.toBeNull();
+  });
+
+  it('a pinned conversation is rejected from a bulk delete with a reason, while the rest of the batch still deletes', async () => {
+    const { token, bucketId } = await seedAccount('pin-delete@example.com');
+    const pinned = await importAndWaitByTitle(token, bucketId, 'chatgpt', chatGptExport([{ role: 'user', text: 'pinned one', epochSec: 1700000000 }], 'Pinned chat'), 'Pinned chat');
+    const unpinned = await importAndWaitByTitle(token, bucketId, 'chatgpt', chatGptExport([{ role: 'user', text: 'unpinned one', epochSec: 1700000001 }], 'Unpinned chat'), 'Unpinned chat');
+
+    const pin = await request(app)
+      .patch(`/api/chat-history/conversations/${pinned!.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ pinned: true });
+    expect(pin.status).toBe(200);
+    expect(pin.body.conversation.pinned).toBe(true);
+
+    const res = await request(app)
+      .delete('/api/chat-history/chats')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: [pinned!.id, unpinned!.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(1);
+    expect(res.body.rejected).toEqual([{ id: pinned!.id, reason: expect.any(String) }]);
+
+    expect(await prisma.conversation.findUnique({ where: { id: pinned!.id } })).not.toBeNull();
+    expect(await prisma.conversation.findUnique({ where: { id: unpinned!.id } })).toBeNull();
+  });
+
+  it('a pinned conversation is rejected from a bulk exclude the same way', async () => {
+    const { token, bucketId } = await seedAccount('pin-exclude@example.com');
+    const conversation = await importAndWait(token, bucketId, 'chatgpt', chatGptExport([{ role: 'user', text: 'pin then exclude', epochSec: 1700000000 }]), 1);
+
+    await request(app).patch(`/api/chat-history/conversations/${conversation!.id}`).set('Authorization', `Bearer ${token}`).send({ pinned: true });
+
+    const res = await request(app)
+      .post('/api/chat-history/chats/exclude')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: [conversation!.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.excluded).toBe(0);
+    expect(res.body.rejected).toEqual([{ id: conversation!.id, reason: expect.any(String) }]);
+
+    const stillHasMessages = await prisma.message.count({ where: { conversationId: conversation!.id } });
+    expect(stillHasMessages).toBeGreaterThan(0);
+  });
+
+  it('unpinning clears the bulk-operation protection', async () => {
+    const { token, bucketId } = await seedAccount('unpin@example.com');
+    const conversation = await importAndWait(token, bucketId, 'chatgpt', chatGptExport([{ role: 'user', text: 'temporarily pinned', epochSec: 1700000000 }]), 1);
+
+    await request(app).patch(`/api/chat-history/conversations/${conversation!.id}`).set('Authorization', `Bearer ${token}`).send({ pinned: true });
+    const unpin = await request(app)
+      .patch(`/api/chat-history/conversations/${conversation!.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ pinned: false });
+    expect(unpin.body.conversation.pinned).toBe(false);
+
+    const res = await request(app)
+      .delete('/api/chat-history/chats')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: [conversation!.id] });
+    expect(res.body.deleted).toBe(1);
+    expect(res.body.rejected).toEqual([]);
+  });
+
+  it('403s a pin toggle for a bucket the caller only has viewer access to', async () => {
+    const { token: ownerToken, bucketId } = await seedAccount('pin-owner@example.com');
+    const viewerToken = await registerAndGetToken(app, 'pin-viewer@example.com');
+    await request(app).post(`/api/buckets/${bucketId}/invites`).set('Authorization', `Bearer ${ownerToken}`).send({ email: 'pin-viewer@example.com', role: 'viewer' });
+    const rawToken = stubOutbox[0].html.match(/invites\/([a-f0-9]+)/)?.[1];
+    await request(app).post(`/api/invites/${rawToken}/accept`).set('Authorization', `Bearer ${viewerToken}`);
+
+    const conversation = await importAndWait(ownerToken, bucketId, 'chatgpt', chatGptExport([{ role: 'user', text: 'viewer cannot pin', epochSec: 1700000000 }]), 1);
+
+    const res = await request(app)
+      .patch(`/api/chat-history/conversations/${conversation!.id}`)
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({ pinned: true });
+    expect(res.status).toBe(403);
   });
 });
 

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ProcessingStatusBadge } from "@/components/shared/processing-status-badge";
+import { ConversationActions } from "@/components/chat-history/conversation-actions";
 
 const PAGE_SIZE = 100;
 
@@ -46,9 +47,14 @@ export default function TranscriptPage() {
               <Badge variant="outline" className="capitalize">
                 {conversation.platform}
               </Badge>
-              <ProcessingStatusBadge status={conversation.status} />
+              {conversation.status === "excluded" ? <Badge variant="outline">Excluded</Badge> : <ProcessingStatusBadge status={conversation.status} />}
             </div>
           </div>
+          <ConversationActions
+            conversation={conversation}
+            onDeleted={() => router.push("/dashboard/chat-history")}
+            onExcluded={() => router.push("/dashboard/chat-history")}
+          />
         </CardHeader>
         {conversation.summary && (
           <CardContent className="border-t border-border pt-4 text-sm text-muted-foreground">

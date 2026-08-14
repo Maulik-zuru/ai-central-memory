@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { ProcessingStatusBadge } from "@/components/shared/processing-status-badge";
 import { ImportWizardDialog } from "@/components/chat-history/import-wizard-dialog";
+import { ConversationActions } from "@/components/chat-history/conversation-actions";
 
 function relativeTime(iso: string) {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -44,6 +45,7 @@ export default function ChatHistoryPage() {
         preview: r.preview,
         status: "ready" as const,
         importedAt: null as string | null,
+        pinned: null as boolean | null, // search results don't carry full conversation metadata
       }))
     : (conversations.data?.items ?? []).map((c) => ({
         id: c.id,
@@ -52,6 +54,7 @@ export default function ChatHistoryPage() {
         preview: c.summary,
         status: c.status,
         importedAt: c.importedAt,
+        pinned: c.pinned as boolean | null,
       }));
 
   return (
@@ -121,7 +124,10 @@ export default function ChatHistoryPage() {
                   )}
                 </div>
               </div>
-              <ProcessingStatusBadge status={item.status} />
+              <div className="flex shrink-0 items-center gap-2">
+                {item.status === "excluded" ? <Badge variant="outline">Excluded</Badge> : <ProcessingStatusBadge status={item.status} />}
+                {item.pinned !== null && <ConversationActions conversation={{ id: item.id, pinned: item.pinned }} />}
+              </div>
             </Link>
           ))}
         </div>

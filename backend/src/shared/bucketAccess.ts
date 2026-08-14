@@ -3,11 +3,15 @@ import { prisma } from './prisma';
 import { AppError } from './errors';
 import { asyncHandler } from './errorHandler';
 
-export type BucketRole = 'viewer' | 'editor' | 'owner';
+// ADR-0001: `contributor` sits between `viewer` and `editor` — can add memories, but (per
+// memory.service.ts's requireAccess) can only edit/delete the ones they themselves added. Every
+// other role's behavior is unaffected by this insertion as long as call sites compare by rank
+// (via this table), not by a hardcoded numeric literal.
+export type BucketRole = 'viewer' | 'contributor' | 'editor' | 'owner';
 
 // The one place role-comparison ordering lives — every other module (bucket.service,
 // membership.service) imports this instead of redefining the ranking.
-export const ROLE_RANK: Record<BucketRole, number> = { viewer: 0, editor: 1, owner: 2 };
+export const ROLE_RANK: Record<BucketRole, number> = { viewer: 0, contributor: 1, editor: 2, owner: 3 };
 
 function resolveBucketId(req: Request): string | undefined {
   return (req.params.bucketId as string | undefined) ?? req.body?.bucketId ?? (req.query.bucketId as string | undefined);

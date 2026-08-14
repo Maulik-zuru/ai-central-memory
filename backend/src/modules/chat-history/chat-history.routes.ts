@@ -29,3 +29,9 @@ chatHistoryRouter.get('/insights', requirePlan('pro'), asyncHandler(chatHistoryC
 // ahead of the global 100kb one in app.ts — see that file's comment for why.
 chatHistoryRouter.post('/ingest/custom-online', asyncHandler(chatHistoryController.ingestCustomOnline));
 chatHistoryRouter.delete('/chats', asyncHandler(chatHistoryController.deleteConversations));
+// Phase 21 (MemoryPlugin_Clone_Spec.md §3.3): Exclude — same bulk `{ids}` shape as delete above,
+// a distinct operation (wipe content, keep a placeholder) rather than a delete variant.
+chatHistoryRouter.post('/chats/exclude', asyncHandler(chatHistoryController.excludeConversations));
+// Phase 21: pin/unpin toggle — the only PATCH in this router, on the same singular
+// `/conversations/:id` path the existing transcript GET already uses.
+chatHistoryRouter.patch('/conversations/:id', asyncHandler(chatHistoryController.updateConversation));

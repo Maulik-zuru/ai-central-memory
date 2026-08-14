@@ -279,10 +279,19 @@ model Conversation {
   messageCount Int       @default(0)
   importedAt   DateTime  @default(now())
   lastSyncedAt DateTime  @default(now())
-  status       String    @default("importing") // "importing" | "ready" | "error"
+  status       String    @default("importing") // "importing" | "ready" | "error" | "excluded"
   errorReason  String?
   syncCursor   Int       @default(0)
   messages     Message[]
+  // Phase 21 (MemoryPlugin_Clone_Spec.md §3.3): Exclude wipes Message/MessageChunk content+vectors
+  // (cascade-deleted, not just soft-hidden) and sets this, keeping the Conversation row itself as
+  // a placeholder — upsertConversation() checks this before ever re-adding content, so an excluded
+  // conversation never reappears on a later sync/import. Contrast Delete below, which removes the
+  // Conversation row outright and therefore CAN reappear on a later sync/import.
+  excludedAt   DateTime?
+  // Phase 21: a pinned conversation is rejected (not silently skipped) out of any bulk-delete
+  // batch that targets it — see conversationService.deleteMany.
+  pinned       Boolean   @default(false)
 
   @@unique([bucketId, platform, externalId])
   @@unique([bucketId, platform, contentHash])

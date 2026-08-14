@@ -1,7 +1,13 @@
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { createMemorySchema, bulkDeleteMemoriesSchema } from '../memory/memory.types';
 import { createBucketSchema } from '../bucket/bucket.types';
-import { searchSchema, injectSchema, ingestCustomOnlineSchema, deleteConversationsSchema } from '../chat-history/chat-history.types';
+import {
+  searchSchema,
+  injectSchema,
+  ingestCustomOnlineSchema,
+  deleteConversationsSchema,
+  excludeConversationsSchema,
+} from '../chat-history/chat-history.types';
 
 /**
  * Phase 15 (US-INT-06): a generated OpenAPI 3.0 document, not a hand-maintained one — every
@@ -271,11 +277,24 @@ export function buildOpenApiDocument(baseUrl: string) {
           summary: 'Delete conversations — irreversible',
           description:
             'A resync or re-import of the same source conversation may recreate it. For "never bring this ' +
-            'back," see the not-yet-built Exclude operation (docs/MemoryPlugin_Parity_Implementation_Plan.md Phase 22).',
+            'back," see POST /api/chat-history/chats/exclude below. A pinned conversation in the batch is ' +
+            'reported in `rejected`, not silently skipped or lumped into `failed`.',
           tags: ['Chat History'],
           security: BEARER_AUTH,
           requestBody: jsonBody(deleteConversationsSchema),
-          responses: { '200': jsonResponse('Counts of what was deleted and what failed.') },
+          responses: { '200': jsonResponse('Counts of what was deleted, failed, and rejected (pinned).') },
+        },
+      },
+      '/api/chat-history/chats/exclude': {
+        post: {
+          summary: 'Exclude conversations — wipes content and vectors, keeps a placeholder',
+          description:
+            'Unlike Delete above, a resync or re-import of the same source conversation can never bring an ' +
+            'excluded one back. A pinned conversation in the batch is reported in `rejected`, same as Delete.',
+          tags: ['Chat History'],
+          security: BEARER_AUTH,
+          requestBody: jsonBody(excludeConversationsSchema),
+          responses: { '200': jsonResponse('Counts of what was excluded, failed, and rejected (pinned).') },
         },
       },
     },

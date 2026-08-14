@@ -38,10 +38,17 @@ async function requireBucketMembership(userId: string, bucketId: string, minRole
   return membership;
 }
 
+// ADR-0001: every role but `contributor` behaves exactly as before this check existed — only a
+// caller whose actual bucket role is `contributor` (not editor/owner) gets a further "is this
+// yours" gate layered on top of the rank check, and only for a `minRole` above `viewer` (reads
+// stay bucket-wide for a contributor, same as any other role).
 async function requireAccess(userId: string, id: string, minRole: BucketRole) {
   const memory = await prisma.memory.findFirst({ where: { id, status: { not: 'deleted' } } });
   if (!memory) throw AppError.notFound('Memory not found');
-  await requireBucketMembership(userId, memory.bucketId, minRole);
+  const membership = await requireBucketMembership(userId, memory.bucketId, minRole);
+  if (membership.role === 'contributor' && minRole !== 'viewer' && memory.userId !== userId) {
+    throw AppError.forbidden('You can only edit or delete memories you added', 'BUCKET_ACCESS_DENIED');
+  }
   return memory;
 }
 
@@ -51,7 +58,7 @@ async function requireAccess(userId: string, id: string, minRole: BucketRole) {
 // choice here, not a silent assumption).
 async function resolveBucketIdByName(userId: string, bucketName: string): Promise<string> {
   const memberships = await prisma.bucketMember.findMany({
-    where: { userId, role: { in: ['editor', 'owner'] } },
+    where: { userId, role: { in: ['contributor', 'editor', 'owner'] } },
     include: { bucket: true },
     orderBy: { bucket: { createdAt: 'asc' } },
   });
@@ -63,7 +70,7 @@ async function resolveBucketIdByName(userId: string, bucketName: string): Promis
 export const memoryService = {
   async create(userId: string, content: string, source: 'manual' | 'one_click' | 'auto' = 'manual', bucketId?: string) {
     const targetBucketId = bucketId
-      ? (await requireBucketMembership(userId, bucketId, 'editor')).bucketId
+      ? (await requireBucketMembership(userId, bucketId, 'contributor')).bucketId
       : await bucketService.getDefaultBucketId(userId);
 
     const memory = await prisma.memory.create({
@@ -92,7 +99,7 @@ export const memoryService = {
     bucketId?: string,
   ) {
     const targetBucketId = bucketId
-      ? (await requireBucketMembership(userId, bucketId, 'editor')).bucketId
+      ? (await requireBucketMembership(userId, bucketId, 'contributor')).bucketId
       : await bucketService.getDefaultBucketId(userId);
 
     // US-MEM-05 / MemoryPlugin_Clone_Spec.md §5.7: image memories aren't supported inside shared
@@ -185,7 +192,7 @@ export const memoryService = {
   },
 
   async update(userId: string, id: string, content: string) {
-    await requireAccess(userId, id, 'editor');
+    await requireAccess(userId, id, 'contributor');
     const updated = await prisma.memory.update({
       where: { id },
       // Attributed to the acting user, who may be a collaborator, not necessarily the memory's
@@ -199,7 +206,7 @@ export const memoryService = {
   },
 
   async delete(userId: string, id: string) {
-    await requireAccess(userId, id, 'editor');
+    await requireAccess(userId, id, 'contributor');
     // Soft delete: excluded from list()/get() immediately (requireAccess and list() both filter
     // on status), never hard-removed, so a version history and audit trail survive (US-MEM-04 AC).
     await prisma.memory.update({ where: { id }, data: { status: 'deleted' } });
@@ -207,8 +214,8 @@ export const memoryService = {
   },
 
   async move(userId: string, id: string, bucketId: string) {
-    await requireAccess(userId, id, 'editor');
-    await requireBucketMembership(userId, bucketId, 'editor');
+    await requireAccess(userId, id, 'contributor');
+    await requireBucketMembership(userId, bucketId, 'contributor');
     const updated = await prisma.memory.update({ where: { id }, data: { bucketId } });
     await auditService.record(userId, 'memory.move', { type: 'Memory', id });
     return toPublic(updated);
@@ -218,7 +225,7 @@ export const memoryService = {
    * decides what a caller-supplied `{bucketId}` or `{bucketName}` actually resolves to. */
   async resolveBucketId(userId: string, target: { bucketId?: string; bucketName?: string }): Promise<string> {
     if (target.bucketId) {
-      return (await requireBucketMembership(userId, target.bucketId, 'editor')).bucketId;
+      return (await requireBucketMembership(userId, target.bucketId, 'contributor')).bucketId;
     }
     return resolveBucketIdByName(userId, target.bucketName!);
   },
@@ -237,20 +244,27 @@ export const memoryService = {
     const targetBucketId = await this.resolveBucketId(userId, target);
 
     const accessible = await prisma.bucketMember.findMany({
-      where: { userId, role: { in: ['editor', 'owner'] } },
-      select: { bucketId: true },
+      where: { userId, role: { in: ['contributor', 'editor', 'owner'] } },
+      select: { bucketId: true, role: true },
     });
-    const editableBucketIds = new Set(accessible.map((m) => m.bucketId));
+    const roleByBucketId = new Map(accessible.map((m) => [m.bucketId, m.role]));
 
     const found = await prisma.memory.findMany({
       where: { id: { in: memoryIds } },
-      select: { id: true, bucketId: true, status: true },
+      select: { id: true, bucketId: true, status: true, userId: true },
     });
     const byId = new Map(found.map((m) => [m.id, m]));
 
+    // ADR-0001: same "contributor edits only their own" gate requireAccess() enforces one memory
+    // at a time — inlined here rather than routed through requireAccess since bulkMove is
+    // deliberately one bulk read instead of N per-memory round trips.
     const rejectedIds = memoryIds.filter((id) => {
       const memory = byId.get(id);
-      return !memory || memory.status === 'deleted' || !editableBucketIds.has(memory.bucketId);
+      if (!memory || memory.status === 'deleted') return true;
+      const role = roleByBucketId.get(memory.bucketId);
+      if (!role) return true;
+      if (role === 'contributor' && memory.userId !== userId) return true;
+      return false;
     });
 
     if (rejectedIds.length > 0) {
@@ -288,8 +302,8 @@ export const memoryService = {
   async merge(userId: string, keepId: string, mergeId: string) {
     if (keepId === mergeId) throw AppError.badRequest('Cannot merge a memory with itself');
     const [keep, merge] = await Promise.all([
-      requireAccess(userId, keepId, 'editor'),
-      requireAccess(userId, mergeId, 'editor'),
+      requireAccess(userId, keepId, 'contributor'),
+      requireAccess(userId, mergeId, 'contributor'),
     ]);
 
     const mergedContent = `${keep.content}\n\n${merge.content}`;
@@ -330,7 +344,7 @@ export const memoryService = {
     if (uniqueIds.length < 2) throw AppError.badRequest('Combine needs at least two distinct memories');
     const [survivorId, ...absorbedIds] = uniqueIds;
 
-    await Promise.all(uniqueIds.map((id) => requireAccess(userId, id, 'editor')));
+    await Promise.all(uniqueIds.map((id) => requireAccess(userId, id, 'contributor')));
 
     await prisma.$transaction([
       prisma.memoryVersion.updateMany({ where: { memoryId: { in: absorbedIds } }, data: { memoryId: survivorId } }),

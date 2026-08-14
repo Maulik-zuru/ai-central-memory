@@ -167,7 +167,7 @@ describe('Shared buckets (US-ORG-04)', () => {
     clearStubOutbox();
   });
 
-  async function setupSharedBucket(role: 'editor' | 'viewer') {
+  async function setupSharedBucket(role: 'contributor' | 'editor' | 'viewer') {
     const ownerToken = await registerAndGetToken(app, 'owner@example.com');
     const memberToken = await registerAndGetToken(app, 'member@example.com');
     const memberId = await getUserId(memberToken);
@@ -286,6 +286,51 @@ describe('Shared buckets (US-ORG-04)', () => {
       .delete(`/api/buckets/${bucket.body.bucket.id}/members/${ownerId}`)
       .set('Authorization', `Bearer ${ownerToken}`);
     expect(res.status).toBe(400);
+  });
+
+  it('a contributor can add memories and edit/delete their own, but gets a 403 on another member\'s (ADR-0001)', async () => {
+    const { ownerToken, memberToken, bucketId } = await setupSharedBucket('contributor');
+
+    const ownerMemory = await request(app)
+      .post('/api/memories')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ content: 'owner memory', bucketId });
+
+    const createAttempt = await request(app)
+      .post('/api/memories')
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({ content: 'contributor memory', bucketId });
+    expect(createAttempt.status).toBe(201);
+    const contributorMemoryId = createAttempt.body.memory.id as string;
+
+    // Own memory: edit and delete both succeed.
+    const editOwn = await request(app)
+      .patch(`/api/memories/${contributorMemoryId}`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({ content: 'edited by contributor' });
+    expect(editOwn.status).toBe(200);
+
+    // Someone else's memory: edit and delete both 403, even though the contributor can read it.
+    const readOthers = await request(app)
+      .get(`/api/memories/${ownerMemory.body.memory.id}`)
+      .set('Authorization', `Bearer ${memberToken}`);
+    expect(readOthers.status).toBe(200);
+
+    const editOthers = await request(app)
+      .patch(`/api/memories/${ownerMemory.body.memory.id}`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({ content: 'edited by contributor' });
+    expect(editOthers.status).toBe(403);
+
+    const deleteOthers = await request(app)
+      .delete(`/api/memories/${ownerMemory.body.memory.id}`)
+      .set('Authorization', `Bearer ${memberToken}`);
+    expect(deleteOthers.status).toBe(403);
+
+    const deleteOwn = await request(app)
+      .delete(`/api/memories/${contributorMemoryId}`)
+      .set('Authorization', `Bearer ${memberToken}`);
+    expect(deleteOwn.status).toBe(204);
   });
 
   it('curator remove/combine/update suggestions across a shared bucket are visible to both contributors', async () => {

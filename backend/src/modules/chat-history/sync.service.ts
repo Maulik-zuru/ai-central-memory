@@ -29,6 +29,9 @@ export const syncService = {
   async processConversation(conversationId: string): Promise<void> {
     const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
     if (!conversation) return;
+    // Phase 21: a second, independent line of defense alongside upsertConversation's own skip —
+    // an excluded conversation must never regain chunks/embeddings, even from a stray call.
+    if (conversation.excludedAt) return;
 
     const messages = await prisma.message.findMany({
       where: { conversationId },

@@ -21,7 +21,19 @@ function contentHash(platform: string, parsed: ParsedConversation): string {
   return crypto.createHash('sha1').update(basis).digest('hex');
 }
 
-async function upsertConversation(userId: string, bucketId: string, platform: string, parsed: ParsedConversation) {
+/**
+ * Phase 21 (ADR-adjacent to Exclude, MemoryPlugin_Clone_Spec.md §3.3 "never re-imported"): an
+ * excluded conversation's placeholder row is matched by the same key as any other conversation,
+ * but content is never written back onto it — returning `skipped: true` here is what makes both
+ * callers below refuse to re-queue `syncService.processConversation` for it, so Exclude actually
+ * holds across a later sync/import instead of being silently undone by the next one.
+ */
+async function upsertConversation(
+  userId: string,
+  bucketId: string,
+  platform: string,
+  parsed: ParsedConversation,
+): Promise<{ conversation: { id: string }; skipped: boolean }> {
   const hash = contentHash(platform, parsed);
 
   const existing = await prisma.conversation.findFirst({
@@ -31,6 +43,10 @@ async function upsertConversation(userId: string, bucketId: string, platform: st
       OR: [...(parsed.externalId ? [{ externalId: parsed.externalId }] : []), { contentHash: hash }],
     },
   });
+
+  if (existing?.excludedAt) {
+    return { conversation: existing, skipped: true };
+  }
 
   const conversation = existing
     ? await prisma.conversation.update({
@@ -68,7 +84,7 @@ async function upsertConversation(userId: string, bucketId: string, platform: st
     });
   }
 
-  return conversation;
+  return { conversation, skipped: false };
 }
 
 export const importService = {
@@ -98,8 +114,8 @@ export const importService = {
 
     const conversationIds: string[] = [];
     for (const parsed of parsedConversations) {
-      const conversation = await upsertConversation(userId, bucketId, platform, parsed);
-      conversationIds.push(conversation.id);
+      const { conversation, skipped } = await upsertConversation(userId, bucketId, platform, parsed);
+      if (!skipped) conversationIds.push(conversation.id);
     }
 
     // Fire-and-forget, same shape as embedding.service.ts's process() — the HTTP response
@@ -123,7 +139,7 @@ export const importService = {
     bucketId: string,
     platform: string,
     conversation: { externalId: string; title: string; messages: ParsedMessage[] },
-  ): Promise<{ status: 'queued' }> {
+  ): Promise<{ status: 'queued' | 'skipped' }> {
     await requireBucketMembership(userId, bucketId, 'editor');
     await historyLimitService.assertWithinLimit(userId, platform);
 
@@ -135,11 +151,14 @@ export const importService = {
       );
     }
 
-    const saved = await upsertConversation(userId, bucketId, platform, {
+    const { conversation: saved, skipped } = await upsertConversation(userId, bucketId, platform, {
       externalId: conversation.externalId,
       title: conversation.title,
       messages: conversation.messages,
     });
+    // Phase 21: an excluded conversation's placeholder is matched but never re-populated —
+    // 'skipped' tells the caller nothing was queued, distinct from a genuine 'queued' ingest.
+    if (skipped) return { status: 'skipped' };
 
     // Same fire-and-forget shape as importFile() above — the caller gets `{status: 'queued'}`
     // immediately, chunking/embedding happens after the response.

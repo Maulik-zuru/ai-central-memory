@@ -55,3 +55,13 @@ export const ingestCustomOnlineSchema = z.object({
 export const deleteConversationsSchema = z.object({
   ids: z.array(z.string().min(1)).min(1).max(100),
 });
+
+// Phase 21 (MemoryPlugin_Clone_Spec.md §3.3): same bulk shape as delete — Exclude is the
+// "wipe content, keep a placeholder, never re-import" sibling operation.
+export const excludeConversationsSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(100),
+});
+
+export const updateConversationSchema = z.object({
+  pinned: z.boolean(),
+});

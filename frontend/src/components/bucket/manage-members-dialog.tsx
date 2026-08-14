@@ -24,7 +24,8 @@ export function ManageMembersDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"editor" | "viewer">("editor");
+  // ADR-0001: Contributor is the spec's default-on-invite role.
+  const [role, setRole] = useState<"contributor" | "editor" | "viewer">("contributor");
   const queryClient = useQueryClient();
 
   const members = useQuery({
@@ -42,7 +43,7 @@ export function ManageMembersDialog({
   });
 
   const changeRole = useMutation({
-    mutationFn: ({ userId, role }: { userId: string; role: "editor" | "viewer" }) =>
+    mutationFn: ({ userId, role }: { userId: string; role: "contributor" | "editor" | "viewer" }) =>
       api.changeMemberRole(bucketId, userId, role),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bucket-members", bucketId] }),
   });
@@ -57,7 +58,7 @@ export function ManageMembersDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Share &quot;{bucketName}&quot;</DialogTitle>
-          <DialogDescription>Invite a teammate as an editor or viewer.</DialogDescription>
+          <DialogDescription>Invite a teammate as a contributor, editor, or viewer.</DialogDescription>
         </DialogHeader>
 
         <form
@@ -75,9 +76,10 @@ export function ManageMembersDialog({
           </div>
           <select
             value={role}
-            onChange={(e) => setRole(e.target.value as "editor" | "viewer")}
+            onChange={(e) => setRole(e.target.value as "contributor" | "editor" | "viewer")}
             className="h-10 rounded-lg border border-input bg-card px-2 text-sm"
           >
+            <option value="contributor">Contributor</option>
             <option value="editor">Editor</option>
             <option value="viewer">Viewer</option>
           </select>
@@ -108,9 +110,12 @@ export function ManageMembersDialog({
                   <>
                     <select
                       value={member.role}
-                      onChange={(e) => changeRole.mutate({ userId: member.userId, role: e.target.value as "editor" | "viewer" })}
+                      onChange={(e) =>
+                        changeRole.mutate({ userId: member.userId, role: e.target.value as "contributor" | "editor" | "viewer" })
+                      }
                       className="h-8 rounded-md border border-input bg-card px-2 text-xs"
                     >
+                      <option value="contributor">Contributor</option>
                       <option value="editor">Editor</option>
                       <option value="viewer">Viewer</option>
                     </select>

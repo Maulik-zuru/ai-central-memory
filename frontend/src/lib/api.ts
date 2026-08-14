@@ -95,7 +95,9 @@ export interface Suggestion {
   createdAt: string;
 }
 
-export type BucketRole = "owner" | "editor" | "viewer";
+// ADR-0001: contributor sits between viewer and editor — can add memories, but can only edit or
+// delete the ones they themselves added.
+export type BucketRole = "owner" | "editor" | "contributor" | "viewer";
 
 export interface Bucket {
   id: string;
@@ -170,10 +172,19 @@ export interface Conversation {
   title: string;
   summary: string | null;
   messageCount: number;
-  status: ProcessingStatus;
+  // Phase 21: "excluded" is Conversation-specific (a File can never be excluded), so it's added
+  // here rather than widening the shared ProcessingStatus type FileRecord.status also uses below.
+  status: ProcessingStatus | "excluded";
   errorReason: string | null;
   importedAt: string;
   lastSyncedAt: string;
+  excludedAt: string | null;
+  pinned: boolean;
+}
+
+export interface BulkConversationResult {
+  failed: string[];
+  rejected: { id: string; reason: string }[];
 }
 
 export interface ConversationPage {
@@ -437,10 +448,10 @@ export const api = {
 
   bucketMembers: (id: string): Promise<{ members: BucketMember[] }> => apiRequest(`/api/buckets/${id}/members`),
 
-  inviteToBucket: (id: string, email: string, role: "editor" | "viewer") =>
+  inviteToBucket: (id: string, email: string, role: "contributor" | "editor" | "viewer") =>
     apiRequest(`/api/buckets/${id}/invites`, { method: "POST", body: JSON.stringify({ email, role }) }),
 
-  changeMemberRole: (bucketId: string, userId: string, role: "editor" | "viewer") =>
+  changeMemberRole: (bucketId: string, userId: string, role: "contributor" | "editor" | "viewer") =>
     apiRequest(`/api/buckets/${bucketId}/members/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
 
   removeMember: (bucketId: string, userId: string) =>
@@ -497,6 +508,21 @@ export const api = {
 
   chatSearch: (params: { query: string; bucketId?: string; mode?: "semantic" | "precise" }): Promise<{ results: ChatSearchResult[] }> =>
     apiRequest("/api/chat-history/search", { method: "POST", body: JSON.stringify(params) }),
+
+  // Phase 21 (MemoryPlugin_Clone_Spec.md §3.3): irreversible — a future sync/import of the same
+  // source can recreate it. Contrast excludeConversations below.
+  deleteConversations: (ids: string[]): Promise<{ deleted: number } & BulkConversationResult> =>
+    apiRequest("/api/chat-history/chats", { method: "DELETE", body: JSON.stringify({ ids }) }),
+
+  // Phase 21: wipes content+vectors but keeps a placeholder — a future sync/import of the same
+  // source never recreates it.
+  excludeConversations: (ids: string[]): Promise<{ excluded: number } & BulkConversationResult> =>
+    apiRequest("/api/chat-history/chats/exclude", { method: "POST", body: JSON.stringify({ ids }) }),
+
+  // Phase 21: pinning protects a conversation from both operations above — attempting either
+  // while pinned returns it in `rejected` with a reason instead of silently skipping it.
+  setConversationPinned: (id: string, pinned: boolean): Promise<{ conversation: Conversation }> =>
+    apiRequest(`/api/chat-history/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ pinned }) }),
 
   historyUsage: (): Promise<HistoryUsage> => apiRequest("/api/chat-history/usage"),
 

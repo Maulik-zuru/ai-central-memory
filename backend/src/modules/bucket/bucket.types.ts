@@ -22,13 +22,16 @@ export const deleteBucketSchema = z.object({
   strategy: z.enum(['move-to-default', 'delete-contents']).optional(),
 });
 
+// ADR-0001: `contributor` is the spec's default-on-invite role — the frontend invite dialog
+// pre-selects it, but the schema itself requires an explicit choice from every caller (no
+// `.default()`), matching every other role field here.
 export const inviteSchema = z.object({
   email: z.string().email(),
-  role: z.enum(['editor', 'viewer']),
+  role: z.enum(['contributor', 'editor', 'viewer']),
 });
 
 export const changeRoleSchema = z.object({
-  role: z.enum(['editor', 'viewer']),
+  role: z.enum(['contributor', 'editor', 'viewer']),
 });
 
 export const moveMemorySchema = z.object({
