@@ -44,6 +44,20 @@ export interface ContextResult {
   weights: { similarity: number; recency: number; category: number; recencyHalfLifeDays: number };
 }
 
+/**
+ * Phase 18 (§7.4 "lost in the middle"): a strength-descending list gets its strongest item
+ * anchored at the front and its second-strongest anchored at the very end — the two positions an
+ * LLM attends to most reliably — rather than left in monotonic descending order, which buries the
+ * strongest items in the middle of a long injected block right along with the weakest ones. This
+ * reorders which *position* each already-selected item lands in; it never changes which items get
+ * selected in the first place, that still happens under the token budget in score order first.
+ */
+export function placeStrongestAtEdges<T>(rankedDescending: T[]): T[] {
+  if (rankedDescending.length === 0) return [];
+  const [strongest, ...rest] = rankedDescending;
+  return [strongest, ...rest.reverse()];
+}
+
 function cacheKey(userId: string, bucketId: string | undefined, snippet: string, smartModeEnabled: boolean): string {
   const hash = crypto.createHash('sha1').update(snippet).digest('hex');
   // Smart Mode is part of the cache identity, not just the scope/snippet — otherwise flipping
@@ -157,7 +171,7 @@ export const retrievalService = {
 
       result = {
         smartModeEnabled,
-        memories: selected,
+        memories: placeStrongestAtEdges(selected),
         actualTokens,
         everythingTokens,
         tokenBudget,
