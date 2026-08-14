@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { AppError } from '../../shared/errors';
 import { categoryService } from './category.service';
-import { renameCategorySchema } from './category.types';
+import { listCategoriesQuerySchema, listCategoryMemoriesQuerySchema, renameCategorySchema } from './category.types';
 
 function requireAuth(req: Request) {
   if (!req.auth) throw AppError.unauthorized();
@@ -11,8 +11,19 @@ function requireAuth(req: Request) {
 export const categoryController = {
   async list(req: Request, res: Response) {
     const { userId } = requireAuth(req);
-    const categories = await categoryService.list(userId);
+    const { bucketId } = listCategoriesQuerySchema.parse(req.query);
+    const categories = await categoryService.list(userId, bucketId);
     res.status(200).json({ categories });
+  },
+
+  // Phase 16: the full memory list within one category — no existing endpoint covered this; net-new
+  // per docs/MemoryPlugin_Parity_Implementation_Plan.md Phase 16 §2, shared with the
+  // `memoryos_list_category_memories` MCP tool via categoryService.listMemories().
+  async listMemories(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const query = listCategoryMemoriesQuerySchema.parse(req.query);
+    const result = await categoryService.listMemories(userId, req.params.id, query);
+    res.status(200).json(result);
   },
 
   async rename(req: Request, res: Response) {

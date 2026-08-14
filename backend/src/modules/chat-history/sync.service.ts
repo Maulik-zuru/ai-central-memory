@@ -2,23 +2,23 @@ import { prisma } from '../../shared/prisma';
 import { logger } from '../../shared/logger';
 import { getLlmProvider } from '../../shared/providers/llm.provider';
 import { toVectorLiteral } from '../../shared/vector';
+import { chunkByTokens } from '../../shared/tokenizer';
 import { summaryService } from './summary.service';
 import { analyticsService } from '../intelligence/analytics.service';
 
-const MAX_CHUNK_CHARS = 1000;
+// Phase 17 (US-ARC-07): ~256 tokens with light overlap, per MemoryPlugin_Clone_Spec.md §5.4's
+// ingestion pipeline ("chunk (~256 tokens, light overlap) → embed → index") — replaces the
+// earlier character-based MAX_CHUNK_CHARS=1000. A message rarely needs splitting at all, but a
+// very long one (a pasted document, a long code block) should still cite/embed in bounded pieces
+// rather than one giant vector diluting similarity, and hybrid search's keyword half benefits
+// from consistent chunk granularity the same way the dense half does.
+const CHUNK_TARGET_TOKENS = 256;
+const CHUNK_OVERLAP_TOKENS = 32;
 
-// A message rarely needs splitting, but a very long one (a pasted document, a long code block)
-// should still cite/embed in bounded pieces rather than one giant vector diluting similarity —
-// same reasoning as Phase 6's page-aware chunker, just without the page dimension.
-function chunkContent(content: string): string[] {
-  if (content.length <= MAX_CHUNK_CHARS) return [content];
-  const chunks: string[] = [];
-  let rest = content;
-  while (rest.length > 0) {
-    chunks.push(rest.slice(0, MAX_CHUNK_CHARS));
-    rest = rest.slice(MAX_CHUNK_CHARS);
-  }
-  return chunks;
+// Exported so rechunk.service.ts's migration for pre-Phase-17 messages chunks with the exact same
+// rule new messages get, rather than a second copy of the same two constants.
+export function chunkContent(content: string): string[] {
+  return chunkByTokens(content, CHUNK_TARGET_TOKENS, CHUNK_OVERLAP_TOKENS);
 }
 
 // The resumable step (US-ARC-02's cancel/retry ACs): processes messages starting at
@@ -50,6 +50,11 @@ export const syncService = {
             UPDATE "MessageChunk" SET embedding = ${toVectorLiteral(embedding)}::vector WHERE id = ${chunk.id}
           `;
         }
+        // Chunked with the current (token-based) algorithm from birth — rechunk.service.ts's
+        // migration exists to backfill this marker for messages synced before Phase 17, not for
+        // ones synced after it.
+        await prisma.message.update({ where: { id: message.id }, data: { rechunkedAt: new Date() } });
+
         // updateMany rather than update: the conversation (and its cascade-deleted messages) may
         // have been removed by the caller while this fire-and-forget step was still running — 0
         // rows affected is a no-op then, not a thrown "record not found" that update() would

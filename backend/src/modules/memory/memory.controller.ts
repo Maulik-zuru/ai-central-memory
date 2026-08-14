@@ -1,7 +1,17 @@
 import { Request, Response } from 'express';
 import { AppError } from '../../shared/errors';
 import { memoryService } from './memory.service';
-import { createMemorySchema, listMemoriesSchema, mergeMemoriesSchema, updateMemorySchema } from './memory.types';
+import { bucketService } from '../bucket/bucket.service';
+import {
+  bulkDeleteMemoriesSchema,
+  createMemorySchema,
+  listMemoriesSchema,
+  mergeMemoriesSchema,
+  searchMemoriesSchema,
+  updateMemorySchema,
+  v2MemoryQuerySchema,
+  v2MemoryUpdateSchema,
+} from './memory.types';
 import { moveMemorySchema } from '../bucket/bucket.types';
 
 function requireAuth(req: Request) {
@@ -52,6 +62,15 @@ export const memoryController = {
     res.status(200).json({ memory });
   },
 
+  // Phase 16: semantic search backing `memoryos_search_memories` for callers with no direct
+  // Prisma access (the local MCP server package) — see memoryService.search()'s comment.
+  async search(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const query = searchMemoriesSchema.parse(req.query);
+    const result = await memoryService.search(userId, query);
+    res.status(200).json(result);
+  },
+
   async update(req: Request, res: Response) {
     const { userId } = requireAuth(req);
     const { content } = updateMemorySchema.parse(req.body);
@@ -83,5 +102,56 @@ export const memoryController = {
     const { userId } = requireAuth(req);
     const versions = await memoryService.listVersions(userId, req.params.id);
     res.status(200).json({ versions });
+  },
+
+  async bulkDelete(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { memoryIds } = bulkDeleteMemoriesSchema.parse(req.body);
+    const result = await memoryService.bulkDelete(userId, memoryIds);
+    res.status(200).json(result);
+  },
+
+  // --- v2: MemoryPlugin_Clone_Spec.md §6 ("GET /api/v2/memory", "POST /api/v2/memory/update") ---
+
+  /** Memories and buckets in one call — the spec's own justification for this endpoint existing
+   * alongside plain `GET /api/memories` is fewer round trips for an integration that always needs
+   * both, not a replacement for it. */
+  async v2Query(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const query = v2MemoryQuerySchema.parse(req.query);
+    const [page, buckets] = await Promise.all([
+      memoryService.list(userId, { cursor: query.cursor, limit: query.limit, bucketId: query.bucketId, type: query.contentType }),
+      bucketService.list(userId),
+    ]);
+    res.status(200).json({ memories: page.items, nextCursor: page.nextCursor, buckets });
+  },
+
+  /** Single-memory edit/move and bulk move, unified into one endpoint per the spec — see
+   * `v2MemoryUpdateSchema`'s comment for why this is a discriminated union rather than two routes. */
+  async v2Update(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const body = v2MemoryUpdateSchema.parse(req.body);
+
+    if ('memoryId' in body) {
+      let memory = await memoryService.get(userId, body.memoryId);
+      if (body.text !== undefined) {
+        memory = await memoryService.update(userId, body.memoryId, body.text);
+      }
+      if (body.bucketId || body.bucketName) {
+        const targetBucketId = await memoryService.resolveBucketId(userId, {
+          bucketId: body.bucketId,
+          bucketName: body.bucketName,
+        });
+        memory = await memoryService.move(userId, body.memoryId, targetBucketId);
+      }
+      res.status(200).json({ memory });
+      return;
+    }
+
+    const result = await memoryService.bulkMove(userId, body.memoryIds, {
+      bucketId: body.bucketId,
+      bucketName: body.bucketName,
+    });
+    res.status(200).json(result);
   },
 };

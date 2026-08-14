@@ -45,6 +45,8 @@ model User {
   usageAnalyticsSummaries UsageAnalyticsSummary[]
   payments Payment[]
   dataExportRequests DataExportRequest[]
+  mcpAuthorizationCodes McpAuthorizationCode[]
+  mcpTokens McpToken[]
 }
 
 model Session {
@@ -177,10 +179,28 @@ model Memory {
   // Phase 9: knowledge graph extraction marker — same lifecycle shape as embedding/categoryId.
   graphProcessedAt DateTime?
   graphEdges KnowledgeGraphEdge[]
+  // Phase 14: the absorbed side of a merge keeps a pointer to its survivor instead of losing its
+  // own identity outright — status still flips to "merged" (excluded from retrieval the same way),
+  // but "what happened to this fact" stays answerable. SetNull rather than Cascade: if the
+  // survivor itself is later hard-deleted, the absorbed memory's row (and its version history)
+  // should still exist, just pointing at nothing.
+  mergedIntoId String?
+  mergedInto   Memory?                     @relation("MemoryMergedInto", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedFrom   Memory[]                    @relation("MemoryMergedInto")
+  // Phase 18 (ADR-0003): set only when a "replaces" suggestion is approved — a genuine
+  // contradiction ("moved to Lisbon" replacing "lives in Berlin"), not every mid-similarity pair.
+  // Same shape as mergedIntoId/mergedInto/mergedFrom above: SetNull rather than Cascade so a later
+  // hard-delete of the older memory doesn't take this one down with it, walkable both directions
+  // for a future "what did I believe as of last Tuesday" history view.
+  supersedesId String?
+  supersedes   Memory?                     @relation("MemorySupersedes", fields: [supersedesId], references: [id], onDelete: SetNull)
+  supersededBy Memory[]                    @relation("MemorySupersedes")
 
   @@index([userId, status])
   @@index([bucketId])
   @@index([categoryId])
+  @@index([mergedIntoId])
+  @@index([supersedesId])
 }
 
 model MemoryVersion {
@@ -196,13 +216,19 @@ model MemoryVersion {
 }
 
 model MemorySuggestion {
-  id           String   @id @default(cuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type         String // "duplicate" | "stale" | "capture"
-  memoryIdA    String? // null for a "capture" suggestion (draft, not yet a real Memory)
-  memoryIdB    String? // null for "capture" and unused for legacy single-memory suggestions
-  draftContent String? // populated only for "capture" suggestions awaiting confirmation
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type   String // "remove" | "combine" | "update" | "capture" — see docs/adr/0004
+  // Phase 19 (ADR-0004): replaces the old memoryIdA/memoryIdB pair with one ordered list — empty
+  // for "capture" (no memory exists yet). Index 0 is always the primary target: the memory
+  // removed, the memory rewritten in place (update), or the chosen survivor (combine, which lists
+  // every absorbed memory after it).
+  memoryIds String[] @default([])
+  // "capture": the drafted text awaiting confirmation into a brand-new Memory. "update"/"combine":
+  // the curator's proposed rewritten/merged content for memoryIds[0] — never written until the
+  // suggestion is approved.
+  draftContent String?
   status       String   @default("pending") // "pending" | "approved" | "dismissed"
   createdAt    DateTime @default(now())
 
@@ -267,6 +293,11 @@ model Message {
   // Phase 9: knowledge graph extraction marker — mirrors Memory.graphProcessedAt.
   graphProcessedAt DateTime?
   graphEdges KnowledgeGraphEdge[]
+  // Phase 17 (US-ARC-07): set the moment this message's chunks are the new ~256-token,
+  // light-overlap shape (chunkByTokens) rather than the old character-based one. sync.service.ts
+  // sets it immediately for every newly-imported message; rechunk.service.ts's migration is what
+  // backfills it — and therefore what it queries by — for messages imported before Phase 17.
+  rechunkedAt DateTime?
 
   @@unique([conversationId, position])
   @@index([conversationId])
@@ -278,6 +309,12 @@ model MessageChunk {
   message   Message                      @relation(fields: [messageId], references: [id], onDelete: Cascade)
   content   String
   embedding Unsupported("vector(1536)")?
+  // Phase 17 (US-ARC-07): the keyword half of hybrid search — a generated column (see this
+  // migration's raw SQL) kept in sync with `content` by Postgres itself, never written to from
+  // application code, so it can never drift out of sync the way a manually-maintained column
+  // could. `Unsupported` for the same reason `embedding` is: Prisma's schema language has no
+  // tsvector type, same as it has no vector type.
+  contentTsv Unsupported("tsvector")?
   createdAt DateTime                     @default(now())
 
   @@index([messageId])
@@ -537,4 +574,109 @@ model ComplianceLog {
   outcome           String // "completed" | "failed"
 
   @@index([userId])
+}
+
+// --- Phase 16 (US-INT-03b): remote MCP — OAuth 2.0 + PKCE + Dynamic Client Registration --------
+// See docs/MemoryPlugin_Parity_Implementation_Plan.md Phase 16 and mcp.oauth.provider.ts, which
+// implements the SDK's `OAuthServerProvider` interface against these four models. No relation to
+// the SDK's own types here — this is a completely ordinary OAuth authorization-server schema; the
+// SDK only cares that the provider's methods return the right shapes.
+
+// A client the SDK's Dynamic Client Registration handler creates on first connect — no relation
+// to User, because a client (e.g. "Claude Desktop") is shared across every account that connects
+// it, not owned by one.
+model McpClient {
+  id                      String    @id @default(cuid()) // == OAuth client_id
+  clientSecretHash        String? // null for a public client (PKCE-only, auth method "none")
+  clientName              String?
+  redirectUris            String[]
+  tokenEndpointAuthMethod String    @default("none")
+  grantTypes              String[]  @default(["authorization_code", "refresh_token"])
+  scope                   String?
+  createdAt               DateTime  @default(now())
+  clientSecretExpiresAt   DateTime? // null = never expires
+
+  authorizationRequests McpAuthorizationRequest[]
+  authorizationCodes    McpAuthorizationCode[]
+  tokens                McpToken[]
+}
+
+// A pending authorize() call, created the moment an MCP client redirects the user's browser to
+// /authorize, before we know which MemoryOS account (if any) is doing the approving — that's why
+// this has no userId yet; McpAuthorizationCode is the row that gains one, once a real user
+// approves via the dashboard consent screen this request id gets rendered on.
+model McpAuthorizationRequest {
+  id            String    @id @default(cuid())
+  clientId      String
+  client        McpClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  redirectUri   String
+  codeChallenge String
+  scopes        String[]
+  state         String?
+  resource      String?
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  // Set once the pending request has been turned into a code (or explicitly denied), so it can
+  // never be approved a second time via a replayed link to the same consent page.
+  resolvedAt    DateTime?
+
+  @@index([clientId])
+}
+
+// Issued only after a logged-in user approves an McpAuthorizationRequest. Single-use — consumedAt
+// is set the moment exchangeAuthorizationCode() succeeds, and a second exchange attempt with the
+// same code is rejected (RFC 6749 §10.5's replay-prevention requirement).
+model McpAuthorizationCode {
+  code          String    @id @default(cuid())
+  clientId      String
+  client        McpClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  redirectUri   String
+  codeChallenge String
+  scopes        String[]
+  resource      String?
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  consumedAt    DateTime?
+
+  @@index([clientId])
+  @@index([userId])
+}
+
+// Access + refresh tokens are stored hashed (same discipline as ApiKey — Phase 1) so a database
+// read alone never yields a usable credential. Refresh rotates in place (a new row is NOT created
+// on refresh; the same row's accessTokenHash/refreshTokenHash/expiry are overwritten) so a stolen,
+// already-rotated refresh token silently stops working the moment the legitimate client refreshes.
+model McpToken {
+  id                   String    @id @default(cuid())
+  clientId             String
+  client               McpClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId               String
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessTokenHash      String    @unique
+  refreshTokenHash     String?   @unique
+  scopes               String[]
+  resource             String?
+  accessTokenExpiresAt DateTime
+  createdAt            DateTime  @default(now())
+  revokedAt            DateTime?
+
+  @@index([clientId])
+  @@index([userId])
+}
+
+// Backs the `export_conversation` MCP tool specifically — deliberately NOT the same model
+// `DataExportRequest` (compliance.export.service.ts) uses for whole-account exports. That flow's
+// download route is ownership-gated (authenticate + requireScope) because the caller is the
+// dashboard user themselves; this one is a short-lived (15-minute) capability URL an MCP client
+// can hand to a human with no further auth, the same signed-URL-with-no-static-secret pattern
+// image memories use — unguessable id + short TTL, not a session check, is the security boundary.
+// Mixing the two into one ownership-checked model would either weaken that check or break the
+// account-export flow; a second small model keeps both invariants intact.
+model McpConversationExport {
+  id         String   @id @default(cuid())
+  downloadKey String
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
 }

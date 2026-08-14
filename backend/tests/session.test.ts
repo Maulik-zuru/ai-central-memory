@@ -5,9 +5,13 @@ import { disconnect, resetDb } from './testUtils';
 const app = createApp();
 const validUser = { email: 'turing@example.com', password: 'Str0ngPassw0rd' };
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 describe('Sessions (US-ACC-08)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('lists active sessions for the authenticated user', async () => {
     const register = await request(app).post('/api/auth/register').send(validUser);
@@ -40,7 +44,6 @@ describe('Sessions (US-ACC-08)', () => {
 
 describe('Auto-capture consent (US-ACC-07)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('persists per-platform consent toggles', async () => {
     const register = await request(app).post('/api/auth/register').send(validUser);

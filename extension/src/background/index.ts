@@ -1,6 +1,7 @@
 import { backgroundApi } from "./api";
 import { checkPendingPairing, PAIRING_ALARM_NAME, startPairing } from "./pairing";
 import { clearApiKey, getApiKey } from "../lib/storage";
+import { dismissOnboarding, getOnboardingState, replayOnboarding } from "../lib/onboarding";
 import type { ExtensionMessage, ExtensionResponse } from "../lib/messages";
 
 // Written stateless-per-message throughout (docs/Phase8_BrowserExtension_Implementation_Plan.md
@@ -66,6 +67,15 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
 
     case "DELETE_MEMORY":
       return backgroundApi.deleteMemory(message.id);
+
+    case "GET_ONBOARDING_STATE":
+      return getOnboardingState();
+
+    case "DISMISS_ONBOARDING":
+      return dismissOnboarding();
+
+    case "REPLAY_ONBOARDING":
+      return replayOnboarding();
   }
 }
 

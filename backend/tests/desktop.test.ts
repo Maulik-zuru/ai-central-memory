@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { createApp } from '../src/app';
-import { disconnect, registerAndGetToken, resetDb } from './testUtils';
+import { disconnect, registerAndGetToken, resetDb, waitFor } from './testUtils';
 import { prisma } from '../src/shared/prisma';
 import { DESKTOP_AGENT_SCOPES } from '../src/modules/desktop/desktop.service';
 
@@ -139,7 +139,7 @@ describe('Desktop device registry', () => {
     const { key, deviceId } = await pairDevice(token);
 
     const before = await request(app).post('/api/capture').set('Authorization', `Bearer ${key}`).send({ snippet: 'I use pnpm.' });
-    expect(before.status).toBe(201);
+    expect(before.status).toBe(202);
 
     const revoke = await request(app).delete(`/api/desktop/devices/${deviceId}`).set('Authorization', `Bearer ${token}`);
     expect(revoke.status).toBe(200);
@@ -193,8 +193,15 @@ describe('Desktop capture consent (US-ACC-07 reused, not re-implemented)', () =>
       .post('/api/capture')
       .set('Authorization', `Bearer ${key}`)
       .send({ snippet: 'I always run tests with vitest.', platform: 'claude-code' });
-    expect(allowed.status).toBe(201);
-    expect(allowed.body.suggestions.length).toBeGreaterThan(0);
+    expect(allowed.status).toBe(202);
+
+    const suggestions = await waitFor(() =>
+      request(app)
+        .get('/api/suggestions')
+        .set('Authorization', `Bearer ${token}`)
+        .then((res) => (res.body.suggestions.length > 0 ? res.body.suggestions : undefined)),
+    );
+    expect(suggestions.length).toBeGreaterThan(0);
 
     await request(app)
       .patch('/api/account/auto-capture')
@@ -205,7 +212,12 @@ describe('Desktop capture consent (US-ACC-07 reused, not re-implemented)', () =>
       .post('/api/capture')
       .set('Authorization', `Bearer ${key}`)
       .send({ snippet: 'I deploy on Fridays.', platform: 'claude-code' });
-    expect(blocked.status).toBe(201);
-    expect(blocked.body.suggestions).toHaveLength(0);
+    expect(blocked.status).toBe(202);
+
+    // Give the fire-and-forget pipeline a moment, then confirm the count never grows past what
+    // the first (allowed) capture already produced — the toggle blocked this one before extraction.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const after = await request(app).get('/api/suggestions').set('Authorization', `Bearer ${token}`);
+    expect(after.body.suggestions).toHaveLength(suggestions.length);
   });
 });

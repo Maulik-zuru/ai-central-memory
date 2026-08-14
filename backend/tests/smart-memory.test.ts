@@ -7,6 +7,11 @@ import { __resetCacheProviderForTests } from '../src/shared/providers/cache.prov
 
 const app = createApp();
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 async function createMemory(token: string, content: string, bucketId?: string) {
   const res = await request(app)
     .post('/api/memories')
@@ -29,7 +34,6 @@ async function seedAccount(email: string) {
 
 describe('Smart Memory — categorization (US-ADV-01)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('assigns a memory similar to an existing category centroid to it, and an unlike memory to a new category', async () => {
     const { token } = await seedAccount('categorize-a@example.com');
@@ -112,9 +116,79 @@ describe('Smart Memory — categorization (US-ADV-01)', () => {
   });
 });
 
+describe('Smart Memory — bucket-scoped categories & category memories (US-INT-03a/b)', () => {
+  beforeEach(resetDb);
+
+  it('GET /api/categories?bucketId= only returns categories with at least one memory in that bucket', async () => {
+    const { token } = await seedAccount('mcp-categories@example.com');
+    const buckets = await request(app).get('/api/buckets').set('Authorization', `Bearer ${token}`);
+    const defaultBucketId = buckets.body.buckets[0].id as string;
+    const other = await request(app).post('/api/buckets').set('Authorization', `Bearer ${token}`).send({ name: 'Other bucket' });
+    const otherBucketId = other.body.bucket.id as string;
+
+    const idInDefault = await createMemory(token, 'I always deploy side projects to Railway.');
+    const idInOther = await createMemory(token, 'My family recipe collection calls for saffron.', otherBucketId);
+    await waitForCategorized(idInDefault);
+    await waitForCategorized(idInOther);
+
+    const scoped = await request(app)
+      .get('/api/categories')
+      .query({ bucketId: defaultBucketId })
+      .set('Authorization', `Bearer ${token}`);
+    expect(scoped.status).toBe(200);
+
+    const defaultMemory = await prisma.memory.findUnique({ where: { id: idInDefault } });
+    const otherMemory = await prisma.memory.findUnique({ where: { id: idInOther } });
+    expect(scoped.body.categories.some((c: { id: string }) => c.id === defaultMemory?.categoryId)).toBe(true);
+    if (otherMemory?.categoryId !== defaultMemory?.categoryId) {
+      expect(scoped.body.categories.some((c: { id: string }) => c.id === otherMemory?.categoryId)).toBe(false);
+    }
+  });
+
+  it('403s a category listing scoped to a bucket the caller is not a member of', async () => {
+    const { token: ownerToken } = await seedAccount('mcp-cat-owner@example.com');
+    const { token: outsiderToken } = await seedAccount('mcp-cat-outsider@example.com');
+    const buckets = await request(app).get('/api/buckets').set('Authorization', `Bearer ${ownerToken}`);
+    const bucketId = buckets.body.buckets[0].id as string;
+
+    const res = await request(app)
+      .get('/api/categories')
+      .query({ bucketId })
+      .set('Authorization', `Bearer ${outsiderToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /api/categories/:id/memories lists only that category\'s memories, cursor-paginated', async () => {
+    const { token } = await seedAccount('mcp-cat-memories@example.com');
+    const id = await createMemory(token, 'I always deploy side projects to Railway.');
+    const memory = await waitForCategorized(id);
+    await createMemory(token, 'My family recipe collection calls for saffron.');
+
+    const res = await request(app)
+      .get(`/api/categories/${memory.categoryId}/memories`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].id).toBe(id);
+    expect(res.body.nextCursor).toBeNull();
+  });
+
+  it('404s a category memories lookup for a category the caller does not own', async () => {
+    const { token: ownerToken } = await seedAccount('mcp-cat-mem-owner@example.com');
+    const { token: outsiderToken } = await seedAccount('mcp-cat-mem-outsider@example.com');
+    const id = await createMemory(ownerToken, 'I always deploy side projects to Railway.');
+    const memory = await waitForCategorized(id);
+
+    const res = await request(app)
+      .get(`/api/categories/${memory.categoryId}/memories`)
+      .set('Authorization', `Bearer ${outsiderToken}`);
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('Smart Memory — context preview (US-ADV-01)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('returns strictly fewer memories and a lower token count than the full scope, given 100+ seeded memories', async () => {
     const { token } = await seedAccount('preview-a@example.com');

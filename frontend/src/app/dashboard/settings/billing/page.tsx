@@ -54,7 +54,7 @@ export default function BillingSettingsPage() {
         </CardHeader>
         <CardContent className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">Conversations stored</span>
-          <span>{summary.history.count}</span>
+          <span>{summary.history.platforms.reduce((total, p) => total + p.count, 0)}</span>
         </CardContent>
       </Card>
     );
@@ -62,6 +62,13 @@ export default function BillingSettingsPage() {
 
   const isPro = summary.plan === "pro";
   const remaining = daysLeft(summary.trialEndsAt);
+  // The Core cap is per platform, per account (MemoryPlugin_Clone_Spec.md §3.3) — a user with two
+  // connected platforms gets 500 of each, not 500 shared between them, so "approaching the limit"
+  // has to be evaluated per platform, not against a summed total.
+  const nearingLimit =
+    summary.history.limit !== null
+      ? summary.history.platforms.filter((p) => p.count >= summary.history.limit! * 0.9)
+      : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -105,17 +112,27 @@ export default function BillingSettingsPage() {
           <CardDescription>What you've used this month.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3 text-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Conversation history</span>
-            <span>
-              {summary.history.count}
-              {summary.history.limit !== null ? ` / ${summary.history.limit}` : " (unlimited)"}
-            </span>
-          </div>
-          {summary.history.limit !== null && summary.history.count >= summary.history.limit * 0.9 && (
+          {summary.history.platforms.length === 0 ? (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Conversation history</span>
+              <span>0{summary.history.limit !== null ? ` / ${summary.history.limit}` : " (unlimited)"}</span>
+            </div>
+          ) : (
+            summary.history.platforms.map((p) => (
+              <div key={p.platform} className="flex items-center justify-between">
+                <span className="text-muted-foreground capitalize">{p.platform}</span>
+                <span>
+                  {p.count}
+                  {summary.history.limit !== null ? ` / ${summary.history.limit}` : " (unlimited)"}
+                </span>
+              </div>
+            ))
+          )}
+          {nearingLimit.length > 0 && (
             <p className="rounded-lg border border-tape/40 bg-tape/10 px-3 py-2 text-xs text-tape-foreground">
-              You're approaching the {summary.history.limit}-conversation Core plan limit. Upgrade to Pro for
-              unlimited history.
+              You're approaching the {summary.history.limit}-conversation Core plan limit on{" "}
+              {nearingLimit.map((p) => p.platform).join(", ")}. Upgrade to Pro for unlimited history on every
+              platform.
             </p>
           )}
           {summary.usage && (

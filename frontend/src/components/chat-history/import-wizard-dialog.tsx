@@ -47,7 +47,11 @@ export function ImportWizardDialog({ bucketId }: { bucketId: string }) {
     },
   });
 
-  const atLimit = usage.data?.limit !== null && usage.data && usage.data.count >= (usage.data.limit ?? Infinity);
+  // Per-platform, not account-wide (MemoryPlugin_Clone_Spec.md §3.3) — the count that matters is
+  // however many conversations are already imported from the platform currently selected above,
+  // not a total across every platform this account has ever imported from.
+  const platformCount = usage.data?.platforms.find((p) => p.platform === platform)?.count ?? 0;
+  const atLimit = usage.data?.limit !== null && usage.data !== undefined && platformCount >= (usage.data.limit ?? Infinity);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -65,8 +69,8 @@ export function ImportWizardDialog({ bucketId }: { bucketId: string }) {
 
         {atLimit && (
           <Alert variant="destructive" className="mb-4">
-            You&apos;ve reached the Core plan&apos;s {usage.data?.limit}-conversation limit. Upgrade to Pro for
-            unlimited history.
+            You&apos;ve reached the Core plan&apos;s {usage.data?.limit}-conversation limit for {platform}. Upgrade
+            to Pro for unlimited history.
           </Alert>
         )}
         {importMutation.isError && (

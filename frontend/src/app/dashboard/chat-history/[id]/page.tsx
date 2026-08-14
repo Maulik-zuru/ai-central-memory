@@ -1,7 +1,8 @@
 "use client";
 
+import { useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -9,16 +10,26 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ProcessingStatusBadge } from "@/components/shared/processing-status-badge";
 
+const PAGE_SIZE = 100;
+
 export default function TranscriptPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
 
-  // US-ARC-04's "very long transcripts load progressively" AC — a fixed first page, not the
-  // entire message history in one response, same cursor-pagination contract memories use.
-  const { data } = useQuery({ queryKey: ["transcript", id], queryFn: () => api.transcript(id, { limit: 100 }) });
+  // US-ARC-04 AC: "very long transcripts load progressively rather than freezing the page" — the
+  // API has always paginated via a message-position cursor; this page previously called it once
+  // with a fixed limit and no way to reach a second page, so a 400-message transcript silently
+  // stopped at message 100 with no indication anything was missing.
+  const transcript = useInfiniteQuery({
+    queryKey: ["transcript", id],
+    queryFn: ({ pageParam }) => api.transcript(id, { limit: PAGE_SIZE, cursor: pageParam }),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  });
+  const messages = useMemo(() => transcript.data?.pages.flatMap((p) => p.messages) ?? [], [transcript.data]);
+  const conversation = transcript.data?.pages[0]?.conversation;
 
-  if (!data) return null;
-  const { conversation, messages } = data;
+  if (!conversation) return null;
 
   return (
     <div className="flex max-w-2xl flex-1 flex-col gap-4">
@@ -64,6 +75,17 @@ export default function TranscriptPage() {
           </div>
         ))}
       </div>
+
+      {transcript.hasNextPage && (
+        <Button
+          variant="outline"
+          className="self-center"
+          disabled={transcript.isFetchingNextPage}
+          onClick={() => transcript.fetchNextPage()}
+        >
+          {transcript.isFetchingNextPage ? "Loading…" : "Load more messages"}
+        </Button>
+      )}
     </div>
   );
 }

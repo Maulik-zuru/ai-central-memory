@@ -9,5 +9,6 @@ export const suggestionRouter = Router();
 suggestionRouter.use(authenticate);
 suggestionRouter.use(apiRateLimit);
 suggestionRouter.get('/', asyncHandler(suggestionController.list));
+suggestionRouter.post('/scan', asyncHandler(suggestionController.scanBucket));
 suggestionRouter.post('/:id/approve', asyncHandler(suggestionController.approve));
 suggestionRouter.post('/:id/dismiss', asyncHandler(suggestionController.dismiss));

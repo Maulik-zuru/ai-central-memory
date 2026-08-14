@@ -29,7 +29,9 @@ export interface Bucket {
 
 export interface Suggestion {
   id: string;
-  type: "duplicate" | "stale" | "capture";
+  // Phase 19 (ADR-0004 "Memory Suggestions curator"): the curator's three operation types, plus
+  // "capture" (a draft awaiting confirmation, unrelated to the curator).
+  type: "remove" | "combine" | "update" | "capture";
   draftContent: string | null;
   status: "pending" | "approved" | "dismissed";
 }

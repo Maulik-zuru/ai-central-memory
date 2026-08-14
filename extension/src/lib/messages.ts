@@ -24,7 +24,10 @@ export type ExtensionMessage =
   | { type: "DISMISS_SUGGESTION"; id: string }
   | { type: "PREVIEW_CONTEXT"; snippet: string; bucketId?: string }
   | { type: "GET_RECENT_MEMORIES"; bucketId?: string; q?: string }
-  | { type: "DELETE_MEMORY"; id: string };
+  | { type: "DELETE_MEMORY"; id: string }
+  | { type: "GET_ONBOARDING_STATE" }
+  | { type: "DISMISS_ONBOARDING" }
+  | { type: "REPLAY_ONBOARDING" };
 
 export type ExtensionResponse<T = unknown> = { ok: true; data: T } | { ok: false; error: string };
 

@@ -1,8 +1,44 @@
 import crypto from 'crypto';
 import { logger } from '../logger';
+import { AppError } from '../errors';
 
 export interface CaptureCandidate {
   content: string;
+}
+
+/**
+ * Phase 18 (§7.4 "fail open, never fail silent"): thrown by every `LlmProvider` method when the
+ * underlying call itself failed (a non-ok HTTP response, a missing embedding in an otherwise-ok
+ * response) — never substituted with a stub-shaped fallback the way this file used to. A response
+ * that succeeds but is merely malformed (unparseable JSON, an out-of-range rerank index) is a
+ * different, lower-severity case and is NOT a ProviderError — those still degrade gracefully,
+ * exactly as before, because the call itself worked and "nothing usable came back" is closer to a
+ * data-quality problem than an outage. Callers catch this specifically to turn "the provider is
+ * down" into a distinguishable, explicit failure (e.g. `AppError.serviceUnavailable`) instead of
+ * a misleadingly-empty, normal-looking result.
+ */
+export class ProviderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProviderError';
+  }
+}
+
+/**
+ * Phase 18 (§7.4): the one seam every call site routes a provider call through, so "the provider
+ * is down" becomes the same typed, distinguishable `AppError.serviceUnavailable` everywhere
+ * (codebase-design: one translation point, not one invented catch block per caller). Anything
+ * that isn't a `ProviderError` is a bug elsewhere and is rethrown unchanged rather than masked.
+ */
+export async function callProvider<T>(fn: () => Promise<T>, message: string): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof ProviderError) {
+      throw AppError.serviceUnavailable(message, 'PROVIDER_UNAVAILABLE');
+    }
+    throw err;
+  }
 }
 
 export interface LlmProvider {
@@ -23,12 +59,61 @@ export interface LlmProvider {
   ): Promise<{ answer: string; usedChunkIds: string[] }>;
   /** Extract named entities and the relations between them mentioned together in one text (Phase 9 US-ADV-02). */
   extractEntities(text: string): Promise<EntityExtractionResult>;
+  /**
+   * Phase 17 Stage 1 (US-ARC-07): rewrite a chat-history recall query into first-person "what I
+   * probably said back then" variants, plus any date bounds implied ("last week", "in March"),
+   * anchored to `now`. The verbatim original query is always present in `variants` — callers
+   * don't need to re-add it themselves.
+   */
+  expandQuery(query: string, now: Date): Promise<{ variants: string[]; dateFilter?: { after?: Date; before?: Date } }>;
+  /**
+   * Phase 17 Stage 4 (US-ARC-07): of the candidates that survived hybrid search + rerank, which
+   * ones actually answer the query — not just resemble it. Returns the relevant subset's ids
+   * (order not meaningful). This is the step the spec calls out as dominating recall latency.
+   */
+  assessChunkRelevance(query: string, candidates: { id: string; content: string }[]): Promise<string[]>;
+  /**
+   * Phase 17 Stage 6 (US-ARC-07, ADR-0005): fold the surviving, context-expanded chunks into one
+   * query-shaped summary within `tokenBudget`, citing which chunk ids it actually drew from.
+   * `priorSummary`, when set, is the running summary from an earlier fold pass over a prior batch
+   * (ADR-0005's map-reduce fold for conversations too large for one pass) — the orchestration of
+   * which batch goes in which call lives in the recall pipeline, not here.
+   */
+  summarizeWithCitations(
+    query: string,
+    chunks: { id: string; content: string }[],
+    opts: { tokenBudget: number; priorSummary?: string },
+  ): Promise<{ summary: string; citedIds: string[] }>;
+  /**
+   * Phase 19 (ADR-0004 "Memory Suggestions curator"): given one memory and its nearest-neighbor
+   * cluster (already gathered by embedding distance — this call reasons about content, not raw
+   * vector distance), propose at most one of the spec's three edits, or no action. This method only
+   * proposes; the caller (curator.service.ts) re-validates every returned id against the actual
+   * cluster before any suggestion is created — a model confidently inventing an id is exactly the
+   * failure mode that safeguard exists for.
+   */
+  proposeCuratorAction(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): Promise<CuratorProposal>;
 }
 
 export interface EntityExtractionResult {
   entities: { name: string; type: string }[];
   relations: { from: string; to: string; label: string }[];
 }
+
+export interface CuratorClusterItem {
+  id: string;
+  content: string;
+  createdAt: Date;
+}
+
+// "you are an editor, not a writer, lose zero information" (MemoryPlugin_Clone_Spec.md §5.2) —
+// combine's content must never invent facts, and must never drop a date/quantity/identifier/
+// current-state/causal-"why" mentioned in any input memory.
+export type CuratorProposal =
+  | { action: 'none' }
+  | { action: 'remove'; memoryId: string }
+  | { action: 'combine'; memoryIds: string[]; content: string }
+  | { action: 'update'; memoryId: string; content: string };
 
 const STOPWORDS = new Set([
   'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'to', 'of', 'in',
@@ -114,6 +199,125 @@ function stubExtractEntities(text: string): EntityExtractionResult {
   return { entities, relations };
 }
 
+// Stub query expansion: without a real LLM there's no genuine paraphrasing to offer, so this is
+// honest about it (same bar stubAnswerWithContext sets) rather than faking variants — the
+// original query is always the sole variant. The "always re-add the original" contract is what
+// every caller actually depends on, and this trivially satisfies it.
+function stubExpandQuery(query: string): { variants: string[]; dateFilter?: { after?: Date; before?: Date } } {
+  return { variants: [query] };
+}
+
+// Stub relevance assessment: keyword-overlap with the query, same scoring shape stubRerank
+// already uses — enough to prove "the relevance filter actually drops candidates" end to end
+// without a network call. A candidate with zero shared non-trivial words is judged irrelevant.
+function stubAssessChunkRelevance(query: string, candidates: { id: string; content: string }[]): string[] {
+  const queryWords = new Set((query.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length >= 3));
+  return candidates
+    .filter((c) => {
+      const words = c.content.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+      return words.some((w) => queryWords.has(w));
+    })
+    .map((c) => c.id);
+}
+
+// Stub summarization-with-citations: no LLM configured, so — same honesty bar
+// stubAnswerWithContext sets — this folds the prior running summary (if any) and the chunks'
+// content verbatim up to a character-based approximation of the token budget, citing every chunk
+// actually included rather than pretending to synthesize prose from them.
+function stubSummarizeWithCitations(
+  chunks: { id: string; content: string }[],
+  opts: { tokenBudget: number; priorSummary?: string },
+): { summary: string; citedIds: string[] } {
+  if (chunks.length === 0) return { summary: opts.priorSummary ?? '', citedIds: [] };
+  const CHARS_PER_TOKEN_ESTIMATE = 4;
+  const budgetChars = opts.tokenBudget * CHARS_PER_TOKEN_ESTIMATE;
+  const parts: string[] = opts.priorSummary ? [opts.priorSummary] : [];
+  const citedIds: string[] = [];
+  let used = parts.join('\n').length;
+  for (const chunk of chunks) {
+    if (used + chunk.content.length > budgetChars && citedIds.length > 0) break;
+    parts.push(chunk.content);
+    citedIds.push(chunk.id);
+    used += chunk.content.length;
+  }
+  return { summary: `No LLM configured — showing the most relevant passages verbatim: ${parts.join(' / ')}`, citedIds };
+}
+
+// Stub curator proposal: no LLM configured, so this reasons about plain word overlap and the same
+// surface-level contradiction cues ("now", "actually", "no longer", ...) a genuine correction tends
+// to use, rather than pretending to judge meaning — same honesty bar every other stub in this file
+// sets. Good enough to exercise "remove/combine/update, never silently drop anything" end to end
+// without a network call; a real provider does the actual semantic judgment behind the identical
+// signature. Distance-based cluster membership already happened upstream (curator.service.ts) by
+// the time this runs — everything handed here already passed that gate.
+const CONTRADICTION_CUES = [
+  'now', 'instead', 'actually', 'no longer', 'moved', 'changed', 'updated', 'used to', "isn't", 'not anymore',
+];
+const CURATOR_NEAR_DUPLICATE_OVERLAP = 0.85;
+// By the time this runs, curator.service.ts's own embedding-distance clustering has already done
+// the real "are these worth considering together" filtering — this floor only needs to catch the
+// degenerate case of zero shared vocabulary at all (two memories that share no real-word overlap
+// whatsoever), not to re-derive relatedness from scratch via a lexical proxy. A stub reasoning from
+// text alone can't tell "same topic, different specific detail" (the exact shape a genuine 3-way
+// combine cluster has) from "unrelated" using word overlap the way a real semantic judgment would.
+const CURATOR_RELATED_OVERLAP_FLOOR = 0.05;
+
+function curatorWordSet(text: string): Set<string> {
+  return new Set((text.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length >= 3));
+}
+
+function jaccardOverlap(a: string, b: string): number {
+  const wa = curatorWordSet(a);
+  const wb = curatorWordSet(b);
+  if (wa.size === 0 || wb.size === 0) return 0;
+  let intersection = 0;
+  for (const w of wa) if (wb.has(w)) intersection++;
+  const union = new Set([...wa, ...wb]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+function stubProposeCuratorAction(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): CuratorProposal {
+  if (neighbors.length === 0) return { action: 'none' };
+
+  const scored = neighbors
+    .map((neighbor) => ({ neighbor, overlap: jaccardOverlap(target.content, neighbor.content) }))
+    .sort((a, b) => b.overlap - a.overlap);
+
+  const closest = scored[0];
+  if (closest.overlap >= CURATOR_NEAR_DUPLICATE_OVERLAP) {
+    // Near-identical — keep whichever is older, remove the newer one (the same convention
+    // duplicate-detection.service.ts used before the curator unified it).
+    const newer = closest.neighbor.createdAt > target.createdAt ? closest.neighbor : target;
+    return { action: 'remove', memoryId: newer.id };
+  }
+
+  const related = scored.filter((s) => s.overlap >= CURATOR_RELATED_OVERLAP_FLOOR);
+  if (related.length === 0) return { action: 'none' };
+
+  const involved = [target, ...related.map((s) => s.neighbor)];
+  const sortedByAge = [...involved].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  const [older] = sortedByAge;
+  const newest = sortedByAge[sortedByAge.length - 1];
+  const rest = sortedByAge.slice(1);
+
+  const hasContradictionCue = rest.some((m) => CONTRADICTION_CUES.some((cue) => m.content.toLowerCase().includes(cue)));
+  if (involved.length === 2 && hasContradictionCue) {
+    // A genuine two-way contradiction rewrites the older memory to the newer, current content —
+    // "update", not "combine" (see the Update/Combine distinction in docs/adr/0004).
+    return { action: 'update', memoryId: older.id, content: newest.content };
+  }
+
+  // A related-but-not-contradicting cluster: fold every involved memory's content, verbatim and
+  // in chronological order, into the survivor — concatenation trivially satisfies "lose zero
+  // information" (CuratorProposal's own comment) even though it isn't polished prose; a real
+  // provider does the actual clean synthesis behind the identical signature.
+  return {
+    action: 'combine',
+    memoryIds: sortedByAge.map((m) => m.id),
+    content: sortedByAge.map((m) => m.content).join('\n\n'),
+  };
+}
+
 const EMBEDDING_DIM = 1536;
 
 /**
@@ -150,6 +354,116 @@ function stubExtract(snippet: string): CaptureCandidate[] {
     .map((content) => ({ content }));
 }
 
+// Shared parsing helpers for the two real providers' Phase 17 methods (AnthropicLlmProvider and
+// OpenRouterLlmProvider) — one place for "how a query-expansion/relevance/summary reply gets
+// interpreted" rather than two copies that could quietly drift apart.
+
+function mergeWithOriginal(query: string, rewritten: string[]): string[] {
+  return [query, ...rewritten.filter((v) => v !== query)];
+}
+
+function parseDateFilter(raw?: { after?: string; before?: string }): { after?: Date; before?: Date } | undefined {
+  if (!raw) return undefined;
+  const after = raw.after ? new Date(raw.after) : undefined;
+  const before = raw.before ? new Date(raw.before) : undefined;
+  const validAfter = after && !isNaN(after.getTime()) ? after : undefined;
+  const validBefore = before && !isNaN(before.getTime()) ? before : undefined;
+  if (!validAfter && !validBefore) return undefined;
+  return { after: validAfter, before: validBefore };
+}
+
+function parseRelevanceReply(reply: string, candidates: { id: string; content: string }[]): string[] {
+  const trimmed = reply.trim();
+  if (trimmed.toUpperCase() === 'NONE') return [];
+  if (!/^[\d\s,]+$/.test(trimmed)) {
+    // Not a parse failure worth throwing over (the call itself succeeded) — but also not a
+    // trustworthy relevance judgment, so fail open by keeping every candidate rather than
+    // silently dropping all of them (§7.4).
+    logger.error('Relevance-assessment reply was not in the expected format; keeping all candidates');
+    return candidates.map((c) => c.id);
+  }
+  const indices = trimmed
+    .split(',')
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length);
+  return indices.map((i) => candidates[i].id);
+}
+
+function parseSummaryReply(reply: string, chunks: { id: string; content: string }[]): { summary: string; citedIds: string[] } {
+  const usedMatch = reply.match(/USED:\s*([\d,\s]+)/i);
+  const summary = reply.replace(/USED:\s*[\d,\s]+/i, '').trim();
+  const citedIds = usedMatch
+    ? usedMatch[1]
+        .split(',')
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((i) => Number.isInteger(i) && i >= 0 && i < chunks.length)
+        .map((i) => chunks[i].id)
+    : chunks.map((c) => c.id);
+  return { summary, citedIds };
+}
+
+function extractCuratorContent(lines: string[]): string | undefined {
+  const idx = lines.findIndex((l) => /^CONTENT:/i.test(l));
+  if (idx === -1) return undefined;
+  const first = lines[idx].replace(/^CONTENT:\s*/i, '');
+  return [first, ...lines.slice(idx + 1)].join('\n').trim();
+}
+
+// Phase 19 (ADR-0004): a malformed-but-present curator reply (the call succeeded, but wasn't one
+// of the expected REMOVE/COMBINE/UPDATE/NONE shapes, or referenced an out-of-range index) is a
+// data-quality issue, not an infra failure — falls back to the same word-overlap heuristic the
+// stub provider uses, rather than throwing or silently proposing nothing.
+function parseCuratorReply(reply: string, target: CuratorClusterItem, neighbors: CuratorClusterItem[]): CuratorProposal {
+  const all = [target, ...neighbors];
+  const lines = reply.split('\n').map((l) => l.trim()).filter(Boolean);
+  const first = lines[0] ?? '';
+
+  const removeMatch = first.match(/^REMOVE\s+(\d+)/i);
+  if (removeMatch) {
+    const item = all[parseInt(removeMatch[1], 10)];
+    if (item) return { action: 'remove', memoryId: item.id };
+  }
+
+  const combineMatch = first.match(/^COMBINE\s+([\d,\s]+)/i);
+  if (combineMatch) {
+    const indices = combineMatch[1].split(',').map((s) => parseInt(s.trim(), 10));
+    const items = indices.map((i) => all[i]).filter((item): item is CuratorClusterItem => Boolean(item));
+    const content = extractCuratorContent(lines) ?? items.map((i) => i.content).join('\n\n');
+    if (items.length >= 2) return { action: 'combine', memoryIds: items.map((i) => i.id), content };
+  }
+
+  const updateMatch = first.match(/^UPDATE\s+(\d+)/i);
+  if (updateMatch) {
+    const item = all[parseInt(updateMatch[1], 10)];
+    const content = extractCuratorContent(lines);
+    if (item && content) return { action: 'update', memoryId: item.id, content };
+  }
+
+  if (/^NONE/i.test(first)) return { action: 'none' };
+
+  logger.error('Curator-proposal reply was not in the expected format; using the word-overlap heuristic');
+  return stubProposeCuratorAction(target, neighbors);
+}
+
+function curatorPromptListing(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): string {
+  return [target, ...neighbors]
+    .map((item, i) => `[${i}]${i === 0 ? ' (target)' : ''} (created ${item.createdAt.toISOString()}) ${item.content}`)
+    .join('\n');
+}
+
+const CURATOR_SYSTEM_PROMPT =
+  'You are a memory curator, not a writer — you are an editor: lose zero information, never invent ' +
+  'a fact that is not already stated in one of the memories below. Given the target memory (index 0) ' +
+  "and its cluster of related memories, decide on exactly ONE of:\n" +
+  'REMOVE <index> — that memory is a duplicate/redundant memory that should be removed.\n' +
+  'COMBINE <comma-separated indices, at least two> then a line "CONTENT: <merged text>" — near-duplicate ' +
+  'memories folded into one cleaner entry; the merged text must preserve every date, quantity, ' +
+  'identifier, current state, and causal "why" mentioned in ANY of the combined memories.\n' +
+  'UPDATE <index> then a line "CONTENT: <rewritten text>" — that memory has become stale and should ' +
+  'be rewritten to reflect the current, correct fact.\n' +
+  'NONE — no edit is warranted.\n' +
+  'Reply with ONLY the action line (and a CONTENT line if required), no commentary.';
+
 export const stubLlmProvider: LlmProvider = {
   async extractMemoryCandidates(snippet: string) {
     return stubExtract(snippet);
@@ -172,6 +486,18 @@ export const stubLlmProvider: LlmProvider = {
   async extractEntities(text: string) {
     return stubExtractEntities(text);
   },
+  async expandQuery(query: string) {
+    return stubExpandQuery(query);
+  },
+  async assessChunkRelevance(query, candidates) {
+    return stubAssessChunkRelevance(query, candidates);
+  },
+  async summarizeWithCitations(_query, chunks, opts) {
+    return stubSummarizeWithCitations(chunks, opts);
+  },
+  async proposeCuratorAction(target, neighbors) {
+    return stubProposeCuratorAction(target, neighbors);
+  },
 };
 
 /**
@@ -193,35 +519,19 @@ const NO_TRAINING_HEADERS = { 'anthropic-beta': 'zero-retention-2024-01-01' } as
 // Real providers plug in here behind the same interface (codebase-design: swappable, small
 // surface). Anthropic has no first-party embeddings endpoint, so extraction and embedding are
 // deliberately independent — either can be "real" while the other stays stubbed.
-class AnthropicLlmProvider implements LlmProvider {
+export class AnthropicLlmProvider implements LlmProvider {
   constructor(private apiKey: string) {}
 
   async extractMemoryCandidates(snippet: string): Promise<CaptureCandidate[]> {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
-        ...NO_TRAINING_HEADERS,
-      },
-      body: JSON.stringify({
-        model: 'claude-3-5-haiku-latest',
-        max_tokens: 512,
-        system:
-          'Extract atomic, self-contained facts worth remembering long-term from the conversation snippet. ' +
-          'Reply with one fact per line, no numbering, no commentary. If nothing is worth remembering, reply with an empty response.',
-        messages: [{ role: 'user', content: snippet }],
-      }),
-    });
-
-    if (!res.ok) {
-      logger.error({ status: res.status }, 'Anthropic extraction call failed; falling back to stub');
-      return stubExtract(snippet);
-    }
-
-    const body = (await res.json()) as { content?: { text?: string }[] };
-    const text = body.content?.[0]?.text ?? '';
+    // Empty is a legitimate reply here (the prompt itself invites it: "if nothing is worth
+    // remembering, reply with an empty response") — complete() only throws on an actual call
+    // failure, so an empty-but-successful reply correctly becomes zero candidates, not a stub.
+    const text = await this.complete(
+      'Extract atomic, self-contained facts worth remembering long-term from the conversation snippet. ' +
+        'Reply with one fact per line, no numbering, no commentary. If nothing is worth remembering, reply with an empty response.',
+      snippet,
+      512,
+    );
     return text
       .split('\n')
       .map((line) => line.trim())
@@ -230,45 +540,24 @@ class AnthropicLlmProvider implements LlmProvider {
   }
 
   async embed(text: string): Promise<number[]> {
-    // No first-party Anthropic embeddings API — fall back to the deterministic hash embedding
-    // unless a separate embedding provider (e.g. OpenAI) is configured.
+    // No first-party Anthropic embeddings API — always the deterministic hash embedding unless a
+    // separate embedding provider (e.g. OpenAI) is configured. Deliberate design, not a failure
+    // fallback: there is no real-embedding attempt here to fail in the first place.
     return hashEmbed(text);
   }
 
   async suggestCategoryLabel(content: string): Promise<string> {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
-        ...NO_TRAINING_HEADERS,
-      },
-      body: JSON.stringify({
-        model: 'claude-3-5-haiku-latest',
-        max_tokens: 16,
-        system: 'Reply with a short (1-3 word) title-case category label for the memory below. No punctuation, no commentary.',
-        messages: [{ role: 'user', content }],
-      }),
-    });
-
-    if (!res.ok) {
-      logger.error({ status: res.status }, 'Anthropic category-label call failed; falling back to stub');
-      return stubSuggestCategoryLabel(content);
-    }
-
-    const body = (await res.json()) as { content?: { text?: string }[] };
-    const label = body.content?.[0]?.text?.trim();
-    return label || stubSuggestCategoryLabel(content);
+    const label = await this.complete(
+      'Reply with a short (1-3 word) title-case category label for the memory below. No punctuation, no commentary.',
+      content,
+      16,
+    );
+    return label.trim() || stubSuggestCategoryLabel(content);
   }
 
   async summarize(text: string): Promise<string> {
-    const res = await this.complete(
-      'Summarize the following in 2-3 sentences, no preamble.',
-      text,
-      256,
-    );
-    return res ?? stubSummarize(text);
+    const res = await this.complete('Summarize the following in 2-3 sentences, no preamble.', text, 256);
+    return res || stubSummarize(text);
   }
 
   async rerank(query: string, candidates: { id: string; content: string }[]): Promise<string[]> {
@@ -280,11 +569,14 @@ class AnthropicLlmProvider implements LlmProvider {
       `Query: ${query}\n\nCandidates:\n${listing}`,
       64,
     );
+    // A malformed-but-present reply is a data-quality issue, not an infra failure — complete()
+    // already threw for the latter, so degrading to the stub ordering here is the right call only
+    // for "the model gave us something we couldn't use."
     const order = res
-      ?.split(',')
+      .split(',')
       .map((s) => parseInt(s.trim(), 10))
       .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length);
-    if (!order || order.length !== candidates.length) return stubRerank(query, candidates);
+    if (order.length !== candidates.length) return stubRerank(query, candidates);
     return order.map((i) => candidates[i].id);
   }
 
@@ -322,7 +614,6 @@ class AnthropicLlmProvider implements LlmProvider {
       text,
       512,
     );
-    if (!res) return stubExtractEntities(text);
     try {
       const parsed = JSON.parse(res) as EntityExtractionResult;
       if (!Array.isArray(parsed.entities) || !Array.isArray(parsed.relations)) {
@@ -335,7 +626,80 @@ class AnthropicLlmProvider implements LlmProvider {
     }
   }
 
-  private async complete(system: string, userText: string, maxTokens: number): Promise<string | null> {
+  // Phase 17/18 (§7.4 "fail open, never fail silent"): a real call failure throws (complete()
+  // itself does the throwing now — see its comment) rather than falling back to a stub-shaped
+  // result. A recall pipeline stage silently substituting a plausible-looking result on provider
+  // failure is exactly the anti-pattern the spec calls "the single highest-value bug" next to
+  // raw-score fusion — the caller needs to be able to tell "the provider is down" from "genuinely
+  // nothing relevant" (a 500-plus-retry is very different from a legitimate 200 with an empty
+  // result). A malformed-but-present response (the call succeeded, the content just didn't parse)
+  // is a different, lower-severity case — handled per method below, generally by degrading rather
+  // than throwing.
+  async expandQuery(query: string, now: Date): Promise<{ variants: string[]; dateFilter?: { after?: Date; before?: Date } }> {
+    const res = await this.complete(
+      'Rewrite the recall query into 2-4 first-person variants of what the user probably said back ' +
+        'then (statement form, not question form) — e.g. "what did I decide about the database" becomes ' +
+        'variants like "we decided to use Postgres" or "I chose Postgres for the database". Also extract ' +
+        `any date range the query implies, relative to right now (${now.toISOString()}). Reply with ONLY ` +
+        'strict JSON of the shape {"variants":["...","..."],"dateFilter":{"after":"ISO date","before":"ISO date"}}. ' +
+        'Omit dateFilter entirely if no date is implied. No commentary, no markdown fences.',
+      query,
+      256,
+    );
+    try {
+      const parsed = JSON.parse(res) as { variants?: unknown; dateFilter?: { after?: string; before?: string } };
+      const rewritten = Array.isArray(parsed.variants) ? parsed.variants.filter((v): v is string => typeof v === 'string') : [];
+      return { variants: mergeWithOriginal(query, rewritten), dateFilter: parseDateFilter(parsed.dateFilter) };
+    } catch {
+      logger.error('Anthropic query-expansion reply was not valid JSON; using the original query only');
+      return { variants: [query] };
+    }
+  }
+
+  async assessChunkRelevance(query: string, candidates: { id: string; content: string }[]): Promise<string[]> {
+    if (candidates.length === 0) return [];
+    const listing = candidates.map((c, i) => `[${i}] ${c.content}`).join('\n');
+    const res = await this.complete(
+      'Given the query and a numbered list of candidate passages, reply with ONLY the indices of ' +
+        'passages that actually answer or are directly relevant to the query — not just superficially ' +
+        'similar — comma-separated (e.g. "0,3,4"). If none are relevant, reply with NONE. No commentary.',
+      `Query: ${query}\n\nCandidates:\n${listing}`,
+      128,
+    );
+    return parseRelevanceReply(res, candidates);
+  }
+
+  async summarizeWithCitations(
+    query: string,
+    chunks: { id: string; content: string }[],
+    opts: { tokenBudget: number; priorSummary?: string },
+  ): Promise<{ summary: string; citedIds: string[] }> {
+    if (chunks.length === 0) return { summary: '', citedIds: [] };
+    const listing = chunks.map((c, i) => `[${i}] ${c.content}`).join('\n\n');
+    const priorContext = opts.priorSummary ? `What's established so far: ${opts.priorSummary}\n\n` : '';
+    const res = await this.complete(
+      `Summarize the passages below, addressing the query, within roughly ${opts.tokenBudget} tokens. ` +
+        'Ground every claim in the passages — do not invent anything they don\'t say. End your reply ' +
+        'with a line "USED: <comma-separated indices you drew from>".',
+      `${priorContext}Query: ${query}\n\nPassages:\n${listing}`,
+      opts.tokenBudget + 50,
+    );
+    return parseSummaryReply(res, chunks);
+  }
+
+  // Phase 19 (ADR-0004): remove/combine/update/none — see parseCuratorReply's comment for how a
+  // malformed reply degrades, and this class's shared comment above `complete()` for why a real
+  // call failure throws rather than substituting a guess.
+  async proposeCuratorAction(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): Promise<CuratorProposal> {
+    const res = await this.complete(CURATOR_SYSTEM_PROMPT, curatorPromptListing(target, neighbors), 512);
+    return parseCuratorReply(res, target, neighbors);
+  }
+
+  // Phase 18 (§7.4): the one place a real call failure becomes a thrown ProviderError instead of
+  // logged-and-substituted — every method above that routes through this now genuinely fails
+  // loud on an outage, and only degrades gracefully (per method, above) when the call succeeded
+  // but its content wasn't usable.
+  private async complete(system: string, userText: string, maxTokens: number): Promise<string> {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -352,15 +716,15 @@ class AnthropicLlmProvider implements LlmProvider {
       }),
     });
     if (!res.ok) {
-      logger.error({ status: res.status }, 'Anthropic completion call failed; falling back to stub');
-      return null;
+      logger.error({ status: res.status }, 'Anthropic completion call failed');
+      throw new ProviderError(`Anthropic completion call failed with status ${res.status}`);
     }
     const body = (await res.json()) as { content?: { text?: string }[] };
-    return body.content?.[0]?.text?.trim() ?? null;
+    return body.content?.[0]?.text?.trim() ?? '';
   }
 }
 
-class OpenAiEmbeddingProvider {
+export class OpenAiEmbeddingProvider {
   constructor(private apiKey: string) {}
 
   async embed(text: string): Promise<number[]> {
@@ -371,12 +735,14 @@ class OpenAiEmbeddingProvider {
     });
 
     if (!res.ok) {
-      logger.error({ status: res.status }, 'OpenAI embedding call failed; falling back to stub');
-      return hashEmbed(text);
+      logger.error({ status: res.status }, 'OpenAI embedding call failed');
+      throw new ProviderError(`OpenAI embedding call failed with status ${res.status}`);
     }
 
     const body = (await res.json()) as { data?: { embedding?: number[] }[] };
-    return body.data?.[0]?.embedding ?? hashEmbed(text);
+    const embedding = body.data?.[0]?.embedding;
+    if (!embedding) throw new ProviderError('OpenAI embedding call returned no embedding');
+    return embedding;
   }
 }
 
@@ -384,7 +750,7 @@ class OpenAiEmbeddingProvider {
 // underlying models (Anthropic, OpenAI, Meta, etc.) behind one key — same LlmProvider surface as
 // AnthropicLlmProvider, so it's a drop-in alternative extraction backend. It also proxies
 // OpenAI-compatible embedding models, so it can independently serve embed() too.
-class OpenRouterLlmProvider implements LlmProvider {
+export class OpenRouterLlmProvider implements LlmProvider {
   constructor(
     private apiKey: string,
     private model = 'anthropic/claude-3.5-haiku',
@@ -397,7 +763,6 @@ class OpenRouterLlmProvider implements LlmProvider {
       snippet,
       512,
     );
-    if (res === null) return stubExtract(snippet);
     return res
       .split('\n')
       .map((line) => line.trim())
@@ -413,12 +778,14 @@ class OpenRouterLlmProvider implements LlmProvider {
     });
 
     if (!res.ok) {
-      logger.error({ status: res.status }, 'OpenRouter embedding call failed; falling back to stub');
-      return hashEmbed(text);
+      logger.error({ status: res.status }, 'OpenRouter embedding call failed');
+      throw new ProviderError(`OpenRouter embedding call failed with status ${res.status}`);
     }
 
     const body = (await res.json()) as { data?: { embedding?: number[] }[] };
-    return body.data?.[0]?.embedding ?? hashEmbed(text);
+    const embedding = body.data?.[0]?.embedding;
+    if (!embedding) throw new ProviderError('OpenRouter embedding call returned no embedding');
+    return embedding;
   }
 
   async suggestCategoryLabel(content: string): Promise<string> {
@@ -427,12 +794,12 @@ class OpenRouterLlmProvider implements LlmProvider {
       content,
       16,
     );
-    return res?.trim() || stubSuggestCategoryLabel(content);
+    return res.trim() || stubSuggestCategoryLabel(content);
   }
 
   async summarize(text: string): Promise<string> {
     const res = await this.complete('Summarize the following in 2-3 sentences, no preamble.', text, 256);
-    return res ?? stubSummarize(text);
+    return res || stubSummarize(text);
   }
 
   async rerank(query: string, candidates: { id: string; content: string }[]): Promise<string[]> {
@@ -445,10 +812,10 @@ class OpenRouterLlmProvider implements LlmProvider {
       64,
     );
     const order = res
-      ?.split(',')
+      .split(',')
       .map((s) => parseInt(s.trim(), 10))
       .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length);
-    if (!order || order.length !== candidates.length) return stubRerank(query, candidates);
+    if (order.length !== candidates.length) return stubRerank(query, candidates);
     return order.map((i) => candidates[i].id);
   }
 
@@ -486,7 +853,6 @@ class OpenRouterLlmProvider implements LlmProvider {
       text,
       512,
     );
-    if (!res) return stubExtractEntities(text);
     try {
       const parsed = JSON.parse(res) as EntityExtractionResult;
       if (!Array.isArray(parsed.entities) || !Array.isArray(parsed.relations)) {
@@ -499,6 +865,67 @@ class OpenRouterLlmProvider implements LlmProvider {
     }
   }
 
+  // Phase 17/18 (§7.4) — same "throw on real call failure, degrade gracefully on merely-malformed
+  // content" discipline as AnthropicLlmProvider's identical methods; see that class's comment.
+  async expandQuery(query: string, now: Date): Promise<{ variants: string[]; dateFilter?: { after?: Date; before?: Date } }> {
+    const res = await this.complete(
+      'Rewrite the recall query into 2-4 first-person variants of what the user probably said back ' +
+        'then (statement form, not question form) — e.g. "what did I decide about the database" becomes ' +
+        'variants like "we decided to use Postgres" or "I chose Postgres for the database". Also extract ' +
+        `any date range the query implies, relative to right now (${now.toISOString()}). Reply with ONLY ` +
+        'strict JSON of the shape {"variants":["...","..."],"dateFilter":{"after":"ISO date","before":"ISO date"}}. ' +
+        'Omit dateFilter entirely if no date is implied. No commentary, no markdown fences.',
+      query,
+      256,
+    );
+    try {
+      const parsed = JSON.parse(res) as { variants?: unknown; dateFilter?: { after?: string; before?: string } };
+      const rewritten = Array.isArray(parsed.variants) ? parsed.variants.filter((v): v is string => typeof v === 'string') : [];
+      return { variants: mergeWithOriginal(query, rewritten), dateFilter: parseDateFilter(parsed.dateFilter) };
+    } catch {
+      logger.error('OpenRouter query-expansion reply was not valid JSON; using the original query only');
+      return { variants: [query] };
+    }
+  }
+
+  async assessChunkRelevance(query: string, candidates: { id: string; content: string }[]): Promise<string[]> {
+    if (candidates.length === 0) return [];
+    const listing = candidates.map((c, i) => `[${i}] ${c.content}`).join('\n');
+    const res = await this.complete(
+      'Given the query and a numbered list of candidate passages, reply with ONLY the indices of ' +
+        'passages that actually answer or are directly relevant to the query — not just superficially ' +
+        'similar — comma-separated (e.g. "0,3,4"). If none are relevant, reply with NONE. No commentary.',
+      `Query: ${query}\n\nCandidates:\n${listing}`,
+      128,
+    );
+    return parseRelevanceReply(res, candidates);
+  }
+
+  async summarizeWithCitations(
+    query: string,
+    chunks: { id: string; content: string }[],
+    opts: { tokenBudget: number; priorSummary?: string },
+  ): Promise<{ summary: string; citedIds: string[] }> {
+    if (chunks.length === 0) return { summary: '', citedIds: [] };
+    const listing = chunks.map((c, i) => `[${i}] ${c.content}`).join('\n\n');
+    const priorContext = opts.priorSummary ? `What's established so far: ${opts.priorSummary}\n\n` : '';
+    const res = await this.complete(
+      `Summarize the passages below, addressing the query, within roughly ${opts.tokenBudget} tokens. ` +
+        'Ground every claim in the passages — do not invent anything they don\'t say. End your reply ' +
+        'with a line "USED: <comma-separated indices you drew from>".',
+      `${priorContext}Query: ${query}\n\nPassages:\n${listing}`,
+      opts.tokenBudget + 50,
+    );
+    return parseSummaryReply(res, chunks);
+  }
+
+  // Phase 19 (ADR-0004) — same "throw on real call failure, degrade to the word-overlap heuristic
+  // on merely-malformed content" discipline as AnthropicLlmProvider's identical method.
+  async proposeCuratorAction(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): Promise<CuratorProposal> {
+    const res = await this.complete(CURATOR_SYSTEM_PROMPT, curatorPromptListing(target, neighbors), 512);
+    return parseCuratorReply(res, target, neighbors);
+  }
+
   private headers() {
     return {
       'content-type': 'application/json',
@@ -509,7 +936,7 @@ class OpenRouterLlmProvider implements LlmProvider {
     };
   }
 
-  private async complete(system: string, userText: string, maxTokens: number): Promise<string | null> {
+  private async complete(system: string, userText: string, maxTokens: number): Promise<string> {
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: this.headers(),
@@ -523,11 +950,11 @@ class OpenRouterLlmProvider implements LlmProvider {
       }),
     });
     if (!res.ok) {
-      logger.error({ status: res.status }, 'OpenRouter completion call failed; falling back to stub');
-      return null;
+      logger.error({ status: res.status }, 'OpenRouter completion call failed');
+      throw new ProviderError(`OpenRouter completion call failed with status ${res.status}`);
     }
     const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    return body.choices?.[0]?.message?.content?.trim() ?? null;
+    return body.choices?.[0]?.message?.content?.trim() ?? '';
   }
 }
 
@@ -571,6 +998,10 @@ export function getLlmProvider(): LlmProvider {
     rerank: (query, candidates) => extraction.rerank(query, candidates),
     answerWithContext: (question, chunks) => extraction.answerWithContext(question, chunks),
     extractEntities: (text) => extraction.extractEntities(text),
+    expandQuery: (query, now) => extraction.expandQuery(query, now),
+    assessChunkRelevance: (query, candidates) => extraction.assessChunkRelevance(query, candidates),
+    summarizeWithCitations: (query, chunks, opts) => extraction.summarizeWithCitations(query, chunks, opts),
+    proposeCuratorAction: (target, neighbors) => extraction.proposeCuratorAction(target, neighbors),
   };
   return cached;
 }

@@ -171,6 +171,32 @@ describe('Ask (US-ASK-01, US-ASK-02, US-ASK-03)', () => {
     ]);
   });
 
+  it('locks a thread\'s mode after the first message; a new source needs a new conversation', async () => {
+    const { token } = await seedAccount('ask-lock@example.com');
+    await createMemory(token, 'We chose Postgres with pgvector for the search backend.');
+
+    const first = await request(app)
+      .post('/api/ask')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ question: 'What database do we use?', mode: 'memories' });
+    expect(first.status).toBe(200);
+    const conversationId = first.body.conversationId as string;
+
+    const switched = await request(app)
+      .post('/api/ask')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ conversationId, question: 'What did we discuss last week?', mode: 'chat_history' });
+    expect(switched.status).toBe(400);
+    expect(switched.body.error.code).toBe('ASK_MODE_LOCKED');
+
+    // The same mode as the thread started with is still a normal follow-up, not blocked.
+    const followUp = await request(app)
+      .post('/api/ask')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ conversationId, question: 'Why did we choose it?', mode: 'memories' });
+    expect(followUp.status).toBe(200);
+  });
+
   it('403s a bucket-scoped ask for a bucket the caller is not a member of', async () => {
     const { bucketId } = await seedAccount('ask-owner@example.com');
     const { token: outsiderToken } = await seedAccount('ask-outsider@example.com');

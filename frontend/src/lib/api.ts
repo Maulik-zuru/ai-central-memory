@@ -61,6 +61,8 @@ export interface Memory {
   imageUrl: string | null;
   source: "manual" | "one_click" | "auto";
   status: "active" | "stale" | "merged" | "deleted";
+  mergedIntoId: string | null;
+  supersedesId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -79,13 +81,17 @@ export interface MemoryVersion {
   createdAt: string;
 }
 
+// Phase 19 (ADR-0004 "Memory Suggestions curator"): the curator's three operation types.
+// memoryIds[0] is always the primary target — the memory removed, rewritten in place (update), or
+// the chosen survivor (combine, which lists every absorbed memory after it). bucketId is resolved
+// server-side from that primary memory (null for "capture", which has no memory yet).
 export interface Suggestion {
   id: string;
-  type: "duplicate" | "stale" | "capture";
-  memoryIdA: string | null;
-  memoryIdB: string | null;
+  type: "remove" | "combine" | "update" | "capture";
+  memoryIds: string[];
   draftContent: string | null;
   status: "pending" | "approved" | "dismissed";
+  bucketId: string | null;
   createdAt: string;
 }
 
@@ -168,9 +174,19 @@ export interface ChatSearchResult {
   score: number;
 }
 
+// Per-platform, not one account-wide total — the Core cap is 500 searchable conversations from a
+// single platform on a single account, not one pool shared across every connected platform
+// (MemoryPlugin_Clone_Spec.md §3.3).
 export interface HistoryUsage {
-  count: number;
   limit: number | null;
+  platforms: { platform: string; count: number }[];
+}
+
+// Phase 16 (US-INT-03b): what the MCP consent screen needs to render — which app is asking, for
+// what. Deliberately minimal; the OAuth mechanics (PKCE, redirect_uri, state) never surface here.
+export interface McpConsentInfo {
+  clientName: string;
+  scopes: string[];
 }
 
 export interface MonthlyInsight {
@@ -375,6 +391,11 @@ export const api = {
   dismissSuggestion: (id: string): Promise<{ suggestion: Suggestion }> =>
     apiRequest(`/api/suggestions/${id}/dismiss`, { method: "POST" }),
 
+  // Phase 19 (ADR-0004): the spec's "Check for new" manual scan action — re-runs the curator
+  // across every active memory in one bucket.
+  scanSuggestions: (bucketId: string): Promise<{ scanned: number }> =>
+    apiRequest("/api/suggestions/scan", { method: "POST", body: JSON.stringify({ bucketId }) }),
+
   capture: (snippet: string): Promise<{ suggestions: Suggestion[] }> =>
     apiRequest("/api/capture", { method: "POST", body: JSON.stringify({ snippet }) }),
 
@@ -447,6 +468,14 @@ export const api = {
 
   monthlyInsight: (month?: string): Promise<{ insight: MonthlyInsight }> =>
     apiRequest(`/api/chat-history/insights${month ? `?month=${month}` : ""}`),
+
+  mcpConsent: (requestId: string): Promise<McpConsentInfo> => apiRequest(`/api/mcp/consent/${requestId}`),
+
+  approveMcpConsent: (requestId: string): Promise<{ redirectUrl: string }> =>
+    apiRequest(`/api/mcp/consent/${requestId}/approve`, { method: "POST" }),
+
+  denyMcpConsent: (requestId: string): Promise<{ redirectUrl: string }> =>
+    apiRequest(`/api/mcp/consent/${requestId}/deny`, { method: "POST" }),
 
   uploadFile: (file: File, bucketId: string): Promise<{ file: FileRecord }> => {
     const form = new FormData();

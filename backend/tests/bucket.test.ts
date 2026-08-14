@@ -6,6 +6,11 @@ import { stubOutbox, clearStubOutbox } from '../src/shared/providers/email.provi
 
 const app = createApp();
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 async function getUserId(token: string) {
   const res = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
   return res.body.account.id as string;
@@ -16,7 +21,6 @@ describe('Buckets (US-ORG-01, 02, 03)', () => {
     await resetDb();
     clearStubOutbox();
   });
-  afterAll(disconnect);
 
   it('creates a bucket and the creator gets an owner membership', async () => {
     const token = await registerAndGetToken(app, 'ada@example.com');
@@ -61,6 +65,69 @@ describe('Buckets (US-ORG-01, 02, 03)', () => {
     expect(res.status).toBe(400);
   });
 
+  it('asks for a strategy instead of refusing when a bucket still has memories', async () => {
+    const token = await registerAndGetToken(app, 'franklin@example.com');
+    const bucket = await request(app).post('/api/buckets').set('Authorization', `Bearer ${token}`).send({ name: 'Has memories' });
+    const bucketId = bucket.body.bucket.id;
+    await request(app).post('/api/memories').set('Authorization', `Bearer ${token}`).send({ content: 'keep me', bucketId });
+
+    const withoutStrategy = await request(app).delete(`/api/buckets/${bucketId}`).set('Authorization', `Bearer ${token}`);
+    expect(withoutStrategy.status).toBe(400);
+    expect(withoutStrategy.body.error.code).toBe('BUCKET_NOT_EMPTY');
+    expect(withoutStrategy.body.error.details.memoryCount).toBe(1);
+
+    // The bucket still exists — the refusal above must not have half-applied anything.
+    const stillThere = await request(app).get('/api/buckets').set('Authorization', `Bearer ${token}`);
+    expect(stillThere.body.buckets.some((b: { id: string }) => b.id === bucketId)).toBe(true);
+  });
+
+  it('move-to-default strategy relocates memories and files to the default bucket, then deletes the bucket', async () => {
+    const token = await registerAndGetToken(app, 'agnesi@example.com');
+    const buckets = await request(app).get('/api/buckets').set('Authorization', `Bearer ${token}`);
+    const defaultBucketId = buckets.body.buckets.find((b: { isDefault: boolean }) => b.isDefault).id;
+
+    const bucket = await request(app).post('/api/buckets').set('Authorization', `Bearer ${token}`).send({ name: 'Moving out' });
+    const bucketId = bucket.body.bucket.id;
+    const memory = await request(app)
+      .post('/api/memories')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ content: 'relocate me', bucketId });
+
+    const res = await request(app)
+      .delete(`/api/buckets/${bucketId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ strategy: 'move-to-default' });
+    expect(res.status).toBe(204);
+
+    const inDefault = await request(app)
+      .get('/api/memories')
+      .set('Authorization', `Bearer ${token}`)
+      .query({ bucketId: defaultBucketId });
+    expect(inDefault.body.items.map((m: { id: string }) => m.id)).toContain(memory.body.memory.id);
+
+    const buckets2 = await request(app).get('/api/buckets').set('Authorization', `Bearer ${token}`);
+    expect(buckets2.body.buckets.some((b: { id: string }) => b.id === bucketId)).toBe(false);
+  });
+
+  it('delete-contents strategy removes the memories along with the bucket', async () => {
+    const token = await registerAndGetToken(app, 'noether-b@example.com');
+    const bucket = await request(app).post('/api/buckets').set('Authorization', `Bearer ${token}`).send({ name: 'Deleting out' });
+    const bucketId = bucket.body.bucket.id;
+    const memory = await request(app)
+      .post('/api/memories')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ content: 'delete me too', bucketId });
+
+    const res = await request(app)
+      .delete(`/api/buckets/${bucketId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ strategy: 'delete-contents' });
+    expect(res.status).toBe(204);
+
+    const check = await request(app).get(`/api/memories/${memory.body.memory.id}`).set('Authorization', `Bearer ${token}`);
+    expect(check.status).toBe(404);
+  });
+
   it('moves a memory to exactly one bucket, never duplicating it', async () => {
     const token = await registerAndGetToken(app, 'lovelace@example.com');
     const bucketA = await request(app).post('/api/buckets').set('Authorization', `Bearer ${token}`).send({ name: 'A' });
@@ -99,7 +166,6 @@ describe('Shared buckets (US-ORG-04)', () => {
     await resetDb();
     clearStubOutbox();
   });
-  afterAll(disconnect);
 
   async function setupSharedBucket(role: 'editor' | 'viewer') {
     const ownerToken = await registerAndGetToken(app, 'owner@example.com');
@@ -222,7 +288,7 @@ describe('Shared buckets (US-ORG-04)', () => {
     expect(res.status).toBe(400);
   });
 
-  it('duplicate/stale suggestions across a shared bucket are visible to both contributors', async () => {
+  it('curator remove/combine/update suggestions across a shared bucket are visible to both contributors', async () => {
     const { ownerToken, memberToken, bucketId } = await setupSharedBucket('editor');
 
     await request(app).post('/api/memories').set('Authorization', `Bearer ${ownerToken}`).send({ content: 'We ship every Friday.', bucketId });
@@ -231,6 +297,6 @@ describe('Shared buckets (US-ORG-04)', () => {
     await new Promise((r) => setTimeout(r, 300));
 
     const suggestions = await request(app).get('/api/suggestions').set('Authorization', `Bearer ${memberToken}`);
-    expect(suggestions.body.suggestions.some((s: { type: string }) => s.type === 'duplicate')).toBe(true);
+    expect(suggestions.body.suggestions.some((s: { type: string }) => s.type === 'remove')).toBe(true);
   });
 });

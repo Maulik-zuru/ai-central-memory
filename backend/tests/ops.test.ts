@@ -89,4 +89,24 @@ describe('Phase 12: ops health metrics', () => {
     expect(authorized.body.embeddings).toBeDefined();
     expect(authorized.body.database).toBe('ok');
   });
+
+  it('Phase 17: rechunk-message-chunks reports the backlog on dry run and requires the ops key either way', async () => {
+    process.env.OPS_API_KEY = 'test-ops-key';
+    const { userId, bucketId } = await seedAccount('ops-rechunk@example.com');
+    const conversation = await prisma.conversation.create({
+      data: { userId, bucketId, platform: 'chatgpt', contentHash: 'legacy-h1', title: 'Legacy', status: 'ready', messageCount: 1 },
+    });
+    await prisma.message.create({ data: { conversationId: conversation.id, role: 'user', content: 'legacy content', position: 0, createdAt: new Date() } });
+
+    const unauthorized = await request(app).post('/api/ops/rechunk-message-chunks?dryRun=true');
+    expect(unauthorized.status).toBe(401);
+
+    const dryRun = await request(app).post('/api/ops/rechunk-message-chunks?dryRun=true').set('x-ops-key', 'test-ops-key');
+    expect(dryRun.status).toBe(200);
+    expect(dryRun.body).toEqual({ dryRun: true, messagesRemaining: 1 });
+
+    const started = await request(app).post('/api/ops/rechunk-message-chunks').set('x-ops-key', 'test-ops-key');
+    expect(started.status).toBe(202);
+    expect(started.body).toEqual({ started: true });
+  });
 });

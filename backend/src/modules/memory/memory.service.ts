@@ -3,9 +3,11 @@ import { AppError } from '../../shared/errors';
 import { auditService } from '../audit/audit.service';
 import { embeddingService } from './embedding.service';
 import { getStorageProvider } from '../../shared/providers/storage.provider';
+import { getLlmProvider, callProvider } from '../../shared/providers/llm.provider';
 import { bucketService } from '../bucket/bucket.service';
 import { ROLE_RANK, accessibleBucketIds, type BucketRole } from '../../shared/bucketAccess';
 import { analyticsService } from '../intelligence/analytics.service';
+import { retrievalService } from '../context/retrieval.service';
 
 type MemoryRecord = Awaited<ReturnType<typeof prisma.memory.findFirstOrThrow>>;
 
@@ -18,6 +20,8 @@ function toPublic(memory: MemoryRecord) {
     imageUrl: memory.imageUrl,
     source: memory.source,
     status: memory.status,
+    mergedIntoId: memory.mergedIntoId,
+    supersedesId: memory.supersedesId,
     createdAt: memory.createdAt,
     updatedAt: memory.updatedAt,
   };
@@ -39,6 +43,21 @@ async function requireAccess(userId: string, id: string, minRole: BucketRole) {
   if (!memory) throw AppError.notFound('Memory not found');
   await requireBucketMembership(userId, memory.bucketId, minRole);
   return memory;
+}
+
+// Phase 15: the public API accepts a bucket by name as an alternative to its ID (this codebase
+// doesn't enforce bucket-name uniqueness today — see docs/adr/0002 for the related, still-open
+// bucket-type-discriminator gap — so "first match, oldest first" is a documented, deliberate
+// choice here, not a silent assumption).
+async function resolveBucketIdByName(userId: string, bucketName: string): Promise<string> {
+  const memberships = await prisma.bucketMember.findMany({
+    where: { userId, role: { in: ['editor', 'owner'] } },
+    include: { bucket: true },
+    orderBy: { bucket: { createdAt: 'asc' } },
+  });
+  const match = memberships.find((m) => m.bucket.name.toLowerCase() === bucketName.toLowerCase());
+  if (!match) throw AppError.notFound(`No editable bucket named "${bucketName}"`, 'BUCKET_NOT_FOUND');
+  return match.bucketId;
 }
 
 export const memoryService = {
@@ -75,6 +94,19 @@ export const memoryService = {
     const targetBucketId = bucketId
       ? (await requireBucketMembership(userId, bucketId, 'editor')).bucketId
       : await bucketService.getDefaultBucketId(userId);
+
+    // US-MEM-05 / MemoryPlugin_Clone_Spec.md §5.7: image memories aren't supported inside shared
+    // buckets yet — checked here, not just left as an unstated gap, so a memory saved into a
+    // bucket that's shared *right now* never becomes visible to collaborators through a code path
+    // nobody decided should allow that.
+    const memberCount = await prisma.bucketMember.count({ where: { bucketId: targetBucketId } });
+    if (memberCount > 1) {
+      throw AppError.badRequest(
+        'Image memories aren\'t supported in shared buckets yet. Save it to a bucket only you have access to.',
+        'IMAGE_NOT_SUPPORTED_IN_SHARED_BUCKET',
+      );
+    }
+
     const stored = await getStorageProvider().put(file.buffer, file.filename);
     const content = caption?.trim() || file.filename;
 
@@ -100,7 +132,7 @@ export const memoryService = {
     return this.create(userId, content, 'one_click');
   },
 
-  async list(userId: string, opts: { cursor?: string; limit: number; q?: string; bucketId?: string }) {
+  async list(userId: string, opts: { cursor?: string; limit: number; q?: string; bucketId?: string; type?: 'text' | 'image' }) {
     const bucketIds = opts.bucketId
       ? [(await requireBucketMembership(userId, opts.bucketId, 'viewer')).bucketId]
       : await accessibleBucketIds(userId);
@@ -109,6 +141,7 @@ export const memoryService = {
       bucketId: { in: bucketIds },
       status: 'active',
       ...(opts.q ? { content: { contains: opts.q, mode: 'insensitive' as const } } : {}),
+      ...(opts.type ? { type: opts.type } : {}),
     };
 
     const rows = await prisma.memory.findMany({
@@ -124,6 +157,27 @@ export const memoryService = {
       items: page.map(toPublic),
       nextCursor: hasMore ? page[page.length - 1].id : null,
     };
+  },
+
+  // Phase 16 (US-INT-03a/b): the same semantic ranking the `memoryos_search_memories` MCP tool
+  // needs, pulled out here so both the remote (in-process) tool and this REST endpoint — which
+  // the local MCP server package calls, since it has no direct Prisma access — call one
+  // implementation rather than two independently-drifting copies of the same ranking logic.
+  async search(userId: string, opts: { query: string; bucketId?: string; limit: number }) {
+    const bucketIds = opts.bucketId
+      ? [(await requireBucketMembership(userId, opts.bucketId, 'viewer')).bucketId]
+      : await accessibleBucketIds(userId);
+
+    const provider = getLlmProvider();
+    const embedding = await callProvider(
+      () => provider.embed(opts.query),
+      'Could not search your memories right now — the AI provider is temporarily unavailable.',
+    );
+    const rows = await retrievalService.scoreCandidates(bucketIds, embedding);
+    const ranked = [...rows].sort((a, b) => a.distance - b.distance);
+
+    const hasMore = ranked.length > opts.limit;
+    return { items: hasMore ? ranked.slice(0, opts.limit) : ranked, hasMore };
   },
 
   async get(userId: string, id: string) {
@@ -160,6 +214,77 @@ export const memoryService = {
     return toPublic(updated);
   },
 
+  /** Shared by the single-memory and bulk branches of the v2 update endpoint — one place that
+   * decides what a caller-supplied `{bucketId}` or `{bucketName}` actually resolves to. */
+  async resolveBucketId(userId: string, target: { bucketId?: string; bucketName?: string }): Promise<string> {
+    if (target.bucketId) {
+      return (await requireBucketMembership(userId, target.bucketId, 'editor')).bucketId;
+    }
+    return resolveBucketIdByName(userId, target.bucketName!);
+  },
+
+  /**
+   * Phase 15 (US-INT-06, MemoryPlugin_Clone_Spec.md §6): bulk move, and genuinely all-or-nothing —
+   * every requested ID is resolved and access-checked BEFORE any write happens, so a batch with one
+   * bad ID moves zero memories, not 99 of 100. Mirrors `US-ACC-06`'s account-deletion cascade in
+   * spirit: validate everything first, only then touch the database.
+   */
+  async bulkMove(
+    userId: string,
+    memoryIds: string[],
+    target: { bucketId?: string; bucketName?: string },
+  ): Promise<{ movedCount: number }> {
+    const targetBucketId = await this.resolveBucketId(userId, target);
+
+    const accessible = await prisma.bucketMember.findMany({
+      where: { userId, role: { in: ['editor', 'owner'] } },
+      select: { bucketId: true },
+    });
+    const editableBucketIds = new Set(accessible.map((m) => m.bucketId));
+
+    const found = await prisma.memory.findMany({
+      where: { id: { in: memoryIds } },
+      select: { id: true, bucketId: true, status: true },
+    });
+    const byId = new Map(found.map((m) => [m.id, m]));
+
+    const rejectedIds = memoryIds.filter((id) => {
+      const memory = byId.get(id);
+      return !memory || memory.status === 'deleted' || !editableBucketIds.has(memory.bucketId);
+    });
+
+    if (rejectedIds.length > 0) {
+      throw AppError.notFound(
+        `${rejectedIds.length} of ${memoryIds.length} memories could not be resolved or aren't editable by you — nothing was moved.`,
+        'MEMORIES_NOT_FOUND',
+        { rejectedIds },
+      );
+    }
+
+    await prisma.memory.updateMany({ where: { id: { in: memoryIds } }, data: { bucketId: targetBucketId } });
+    await auditService.record(userId, 'memory.bulkMove', { type: 'Bucket', id: targetBucketId });
+    return { movedCount: memoryIds.length };
+  },
+
+  /**
+   * Deliberately NOT all-or-nothing (contrast with bulkMove above) — a destructive action where
+   * one inaccessible ID shouldn't block deleting the rest the caller does own
+   * (MemoryPlugin_Clone_Spec.md §6: "response reports deleted/failed counts").
+   */
+  async bulkDelete(userId: string, memoryIds: string[]): Promise<{ deleted: number; failed: string[] }> {
+    const failed: string[] = [];
+    let deleted = 0;
+    for (const id of memoryIds) {
+      try {
+        await this.delete(userId, id);
+        deleted++;
+      } catch {
+        failed.push(id);
+      }
+    }
+    return { deleted, failed };
+  },
+
   async merge(userId: string, keepId: string, mergeId: string) {
     if (keepId === mergeId) throw AppError.badRequest('Cannot merge a memory with itself');
     const [keep, merge] = await Promise.all([
@@ -176,7 +301,9 @@ export const memoryService = {
         where: { id: keepId },
         data: { content: mergedContent, versions: { create: { content: mergedContent, changedBy: 'system', changeType: 'merge' } } },
       }),
-      prisma.memory.update({ where: { id: mergeId }, data: { status: 'merged' } }),
+      // Phase 14: the absorbed memory keeps a `mergedIntoId` pointer rather than just a status
+      // flip — "merged" alone tells you it's gone, not where it went.
+      prisma.memory.update({ where: { id: mergeId }, data: { status: 'merged', mergedIntoId: keepId } }),
     ]);
 
     void embeddingService.process(keepId, userId, mergedContent);
@@ -187,5 +314,35 @@ export const memoryService = {
   async listVersions(userId: string, memoryId: string) {
     await requireAccess(userId, memoryId, 'viewer');
     return prisma.memoryVersion.findMany({ where: { memoryId }, orderBy: { createdAt: 'asc' } });
+  },
+
+  /**
+   * Phase 19 (ADR-0004): N-way generalization of `merge()` above, used to approve a curator
+   * "combine" suggestion — `content` is the curator's own proposed merged text (preserving every
+   * named category the spec calls out: dates, quantities, identifiers, current state, causal
+   * "why"), not a blind concatenation of the originals. `memoryIds[0]` is the survivor by
+   * convention (curator.service.ts decides that ordering when the suggestion is created); every
+   * other named memory is absorbed into it exactly as `merge()`'s single absorbed memory is today —
+   * version history moves over, status flips to "merged", `mergedIntoId` records where it went.
+   */
+  async combine(userId: string, memoryIds: string[], content: string) {
+    const uniqueIds = [...new Set(memoryIds)];
+    if (uniqueIds.length < 2) throw AppError.badRequest('Combine needs at least two distinct memories');
+    const [survivorId, ...absorbedIds] = uniqueIds;
+
+    await Promise.all(uniqueIds.map((id) => requireAccess(userId, id, 'editor')));
+
+    await prisma.$transaction([
+      prisma.memoryVersion.updateMany({ where: { memoryId: { in: absorbedIds } }, data: { memoryId: survivorId } }),
+      prisma.memory.update({
+        where: { id: survivorId },
+        data: { content, versions: { create: { content, changedBy: 'system', changeType: 'merge' } } },
+      }),
+      prisma.memory.updateMany({ where: { id: { in: absorbedIds } }, data: { status: 'merged', mergedIntoId: survivorId } }),
+    ]);
+
+    void embeddingService.process(survivorId, userId, content);
+    await auditService.record(userId, 'memory.combine', { type: 'Memory', id: survivorId });
+    return this.get(userId, survivorId);
   },
 };

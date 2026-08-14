@@ -97,7 +97,13 @@ function TabButton({
   );
 }
 
-export function Panel({ onDisconnect }: { onDisconnect: () => void }) {
+export function Panel({
+  onDisconnect,
+  onReplayOnboarding,
+}: {
+  onDisconnect: () => void;
+  onReplayOnboarding: () => void;
+}) {
   const [tab, setTab] = useState<"memories" | "settings">("memories");
   const [account, setAccount] = useState<Account | null>(null);
   const [buckets, setBuckets] = useState<Bucket[]>([]);
@@ -386,6 +392,15 @@ export function Panel({ onDisconnect }: { onDisconnect: () => void }) {
             </div>
           </div>
 
+          <button
+            onClick={async () => {
+              await sendToBackground({ type: "REPLAY_ONBOARDING" });
+              onReplayOnboarding();
+            }}
+            className="rounded-full border border-[var(--border)] px-3 py-2 text-xs text-[var(--foreground)]"
+          >
+            Replay walkthrough
+          </button>
           <button
             onClick={onDisconnect}
             className="mt-1 flex items-center justify-center gap-1.5 rounded-full border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--destructive)] hover:bg-[var(--destructive-foreground)]"

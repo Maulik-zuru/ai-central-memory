@@ -57,4 +57,33 @@ export const conversationService = {
 
     return { conversation: toPublic(conversation), messages, nextCursor };
   },
+
+  /**
+   * Phase 15 (US-INT-06, MemoryPlugin_Clone_Spec.md §6 `DELETE /api/chat-history/chats`):
+   * irreversible — no soft-delete, no placeholder. That's the deliberate difference from the
+   * still-unbuilt Exclude operation (Phase 21/22), which keeps a placeholder specifically so a
+   * future sync never re-adds it; Delete here is the "just get rid of it, a resync can bring it
+   * back" half of that pair, matching what the spec's own data model documents for Conversation.
+   * Message/MessageChunk cascade off Conversation at the schema level, so removing the
+   * Conversation row is the whole operation.
+   *
+   * Per-ID, not all-or-nothing (contrast `memory.service.ts`'s bulkMove) — one inaccessible ID in
+   * a batch of otherwise-owned conversations shouldn't block deleting the rest.
+   */
+  async deleteMany(userId: string, ids: string[]): Promise<{ deleted: number; failed: string[] }> {
+    const failed: string[] = [];
+    let deleted = 0;
+    for (const id of ids) {
+      try {
+        const conversation = await prisma.conversation.findUnique({ where: { id } });
+        if (!conversation) throw AppError.notFound('Conversation not found');
+        await requireBucketMembership(userId, conversation.bucketId, 'editor');
+        await prisma.conversation.delete({ where: { id } });
+        deleted++;
+      } catch {
+        failed.push(id);
+      }
+    }
+    return { deleted, failed };
+  },
 };

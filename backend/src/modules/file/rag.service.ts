@@ -1,7 +1,7 @@
 import { prisma } from '../../shared/prisma';
 import { AppError } from '../../shared/errors';
 import { requireBucketMembership } from '../../shared/bucketAccess';
-import { getLlmProvider } from '../../shared/providers/llm.provider';
+import { getLlmProvider, callProvider } from '../../shared/providers/llm.provider';
 import { toVectorLiteral } from '../../shared/vector';
 import { tokenCount } from '../../shared/tokenizer';
 
@@ -35,7 +35,10 @@ export const ragService = {
     }
 
     const provider = getLlmProvider();
-    const questionEmbedding = await provider.embed(question);
+    const questionEmbedding = await callProvider(
+      () => provider.embed(question),
+      'Could not search this file right now — the AI provider is temporarily unavailable.',
+    );
     const vectorLiteral = toVectorLiteral(questionEmbedding);
 
     const candidates = await prisma.$queryRaw<ChunkRow[]>`
@@ -60,9 +63,13 @@ export const ragService = {
       withinBudget.push(chunk);
     }
 
-    const { answer, usedChunkIds } = await provider.answerWithContext(
-      question,
-      withinBudget.map((c) => ({ id: c.id, content: c.content })),
+    const { answer, usedChunkIds } = await callProvider(
+      () =>
+        provider.answerWithContext(
+          question,
+          withinBudget.map((c) => ({ id: c.id, content: c.content })),
+        ),
+      'Could not generate an answer right now — the AI provider is temporarily unavailable.',
     );
 
     const usedSet = new Set(usedChunkIds);

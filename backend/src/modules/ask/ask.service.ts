@@ -1,7 +1,7 @@
 import { prisma } from '../../shared/prisma';
 import { AppError } from '../../shared/errors';
 import { accessibleBucketIds, requireBucketMembership } from '../../shared/bucketAccess';
-import { getLlmProvider } from '../../shared/providers/llm.provider';
+import { getLlmProvider, callProvider } from '../../shared/providers/llm.provider';
 import { tokenCount } from '../../shared/tokenizer';
 import { retrievalService } from '../context/retrieval.service';
 import { chatSearchService } from '../chat-history/chat-search.service';
@@ -120,6 +120,21 @@ export const askService = {
     if (params.conversationId) {
       conversation = await prisma.askConversation.findUnique({ where: { id: params.conversationId } });
       if (!conversation || conversation.userId !== userId) throw AppError.notFound('Ask conversation not found');
+
+      // US-ASK-02 (revised, MemoryPlugin_Clone_Spec.md §5.5): mode locks the moment a thread has
+      // its first message — a new source needs a new conversation, not a mode-switch mid-thread.
+      // The thread's own first user message is the source of truth, not whatever the client
+      // remembers requesting the thread with.
+      const firstMessage = await prisma.askMessage.findFirst({
+        where: { conversationId: conversation.id, role: 'user' },
+        orderBy: { position: 'asc' },
+      });
+      if (firstMessage?.mode && firstMessage.mode !== params.mode) {
+        throw AppError.badRequest(
+          `This conversation was started in "${firstMessage.mode}" mode and can't switch to "${params.mode}". Start a new conversation to ask in a different mode.`,
+          'ASK_MODE_LOCKED',
+        );
+      }
     } else {
       if (params.bucketId) await requireBucketMembership(userId, params.bucketId, 'viewer');
       conversation = await prisma.askConversation.create({
@@ -144,7 +159,10 @@ export const askService = {
     const composedQuestion = historyPrefix ? `${historyPrefix}\n\nFollow-up question: ${params.question}` : params.question;
 
     const provider = getLlmProvider();
-    const embedding = await provider.embed(params.question);
+    const embedding = await callProvider(
+      () => provider.embed(params.question),
+      'Could not search your memories right now — the AI provider is temporarily unavailable.',
+    );
     const candidates = budget(await gatherCandidates(bucketIds, embedding, params.mode));
 
     const userPosition = await nextPosition(conversation.id);
@@ -159,9 +177,13 @@ export const askService = {
       answer = "I don't have relevant context for that in the sources you selected.";
       citations = [];
     } else {
-      const result = await provider.answerWithContext(
-        composedQuestion,
-        candidates.map((c) => ({ id: c.id, content: c.content })),
+      const result = await callProvider(
+        () =>
+          provider.answerWithContext(
+            composedQuestion,
+            candidates.map((c) => ({ id: c.id, content: c.content })),
+          ),
+        'Could not generate an answer right now — the AI provider is temporarily unavailable.',
       );
       answer = result.answer;
       const usedSet = new Set(result.usedChunkIds);

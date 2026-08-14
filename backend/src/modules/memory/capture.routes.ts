@@ -10,8 +10,10 @@ import { captureService } from './capture.service';
 async function submit(req: Request, res: Response) {
   if (!req.auth) throw AppError.unauthorized();
   const { snippet, platform } = captureSchema.parse(req.body);
-  const suggestions = await captureService.submit(req.auth.userId, snippet, platform);
-  res.status(201).json({ suggestions });
+  // Phase 18 (§7.4): fire-and-forget — the extraction LLM call no longer sits inline, so there's
+  // no suggestion list to hand back yet. The caller polls `GET /api/suggestions` for the result.
+  await captureService.submit(req.auth.userId, snippet, platform);
+  res.status(202).json({ status: 'queued' });
 }
 
 export const captureRouter = Router();

@@ -5,6 +5,11 @@ import { prisma } from '../src/shared/prisma';
 
 const app = createApp();
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 async function seedAccount(email: string) {
   const token = await registerAndGetToken(app, email);
   return { token };
@@ -18,7 +23,6 @@ async function startPairing() {
 
 describe('Extension pairing (US-ACC-03 extended)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('claims a pairing code exactly once — a second claim on the same code fails', async () => {
     const { token } = await seedAccount('ext-a@example.com');
@@ -75,7 +79,6 @@ describe('Extension pairing (US-ACC-03 extended)', () => {
 
 describe('Scope enforcement (requireScope)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   async function pairExtensionKey(token: string): Promise<string> {
     const code = await startPairing();

@@ -7,6 +7,11 @@ import { analyticsService } from '../src/modules/intelligence/analytics.service'
 
 const app = createApp();
 
+// One disconnect for the whole file, at top level: a per-describe afterAll(disconnect) tears down
+// the Prisma connection as soon as the FIRST describe finishes, and every later describe in the
+// file then fails with "Engine is not yet connected" (see tests/compliance.test.ts).
+afterAll(disconnect);
+
 async function seedAccount(email: string) {
   const token = await registerAndGetToken(app, email);
   const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
@@ -67,7 +72,6 @@ async function importConversation(token: string, bucketId: string, text: string,
 
 describe('Phase 9: Knowledge graph (US-ADV-02)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('links two entities mentioned together in a memory, attributed to that memory', async () => {
     const { userId, token } = await seedAccount('graph-a@example.com');
@@ -167,7 +171,6 @@ describe('Phase 9: Knowledge graph (US-ADV-02)', () => {
 
 describe('Phase 9: Usage analytics (US-ADV-03)', () => {
   beforeEach(resetDb);
-  afterAll(disconnect);
 
   it('rollupForUser matches a hand-computed expectation for a scripted sequence of real actions', async () => {
     const { userId, token, bucketId } = await seedAccount('usage-a@example.com');

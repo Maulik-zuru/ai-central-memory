@@ -6,7 +6,14 @@ import { chatSearchService } from './chat-search.service';
 import { historyLimitService } from './history-limit.service';
 import { insightService } from './insight.service';
 import { prisma } from '../../shared/prisma';
-import { importSchema, listConversationsSchema, searchSchema } from './chat-history.types';
+import {
+  deleteConversationsSchema,
+  importSchema,
+  ingestCustomOnlineSchema,
+  injectSchema,
+  listConversationsSchema,
+  searchSchema,
+} from './chat-history.types';
 
 function requireAuth(req: Request) {
   if (!req.auth) throw AppError.unauthorized();
@@ -45,6 +52,13 @@ export const chatHistoryController = {
     res.status(200).json({ results });
   },
 
+  async inject(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { query, bucketId, maxTokens } = injectSchema.parse(req.body);
+    const result = await chatSearchService.inject(userId, { query, bucketId, maxTokens });
+    res.status(200).json(result);
+  },
+
   async usage(req: Request, res: Response) {
     const { userId } = requireAuth(req);
     const usage = await historyLimitService.usage(userId);
@@ -56,5 +70,23 @@ export const chatHistoryController = {
     const month = typeof req.query.month === 'string' ? req.query.month : insightService.monthKey(new Date());
     const insight = await prisma.monthlyInsight.findUnique({ where: { userId_month: { userId, month } } });
     res.status(200).json({ insight: insight ?? { month, summary: null } });
+  },
+
+  async ingestCustomOnline(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { bucketId, platform, conversation } = ingestCustomOnlineSchema.parse(req.body);
+    const result = await importService.ingestCustomOnline(userId, bucketId, platform, {
+      externalId: conversation.id,
+      title: conversation.title,
+      messages: conversation.messages.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt ?? new Date() })),
+    });
+    res.status(202).json(result);
+  },
+
+  async deleteConversations(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { ids } = deleteConversationsSchema.parse(req.body);
+    const result = await conversationService.deleteMany(userId, ids);
+    res.status(200).json(result);
   },
 };

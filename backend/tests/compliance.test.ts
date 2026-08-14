@@ -11,6 +11,7 @@ import {
   localDiskStorageProvider,
 } from '../src/shared/providers/storage.provider';
 import { exportService } from '../src/modules/compliance/export.service';
+import { stubOutbox, clearStubOutbox } from '../src/shared/providers/email.provider';
 
 const app = createApp();
 
@@ -74,7 +75,10 @@ async function seedFullAccount(email: string) {
 }
 
 describe('Phase 11: data export (US-SEC-03, US-ACC-05)', () => {
-  beforeEach(resetDb);
+  beforeEach(async () => {
+    await resetDb();
+    clearStubOutbox();
+  });
 
   it('includes memories, conversations and file metadata — not just a subset', async () => {
     const { token, userId } = await seedFullAccount('export-a@example.com');
@@ -99,6 +103,24 @@ describe('Phase 11: data export (US-SEC-03, US-ACC-05)', () => {
     expect(archive.conversations[0].messages.length).toBeGreaterThan(0);
     expect(archive.buckets.length).toBeGreaterThan(0);
     expect(archive.account.email).toBe('export-a@example.com');
+  });
+
+  it('emails the account a completion notification once the export finishes (US-ACC-05)', async () => {
+    const { token, userId } = await seedAccount('export-notify@example.com');
+
+    const requested = await request(app).post('/api/account/export').set('Authorization', `Bearer ${token}`);
+    expect(requested.status).toBe(202);
+
+    await waitFor(() =>
+      prisma.dataExportRequest
+        .findFirst({ where: { userId } })
+        .then((r) => (r?.status === 'complete' ? r : undefined)),
+    );
+
+    const sent = stubOutbox.find((m) => m.to === 'export-notify@example.com');
+    expect(sent).toBeDefined();
+    expect(sent?.subject.toLowerCase()).toContain('export');
+    expect(sent?.html).toContain('/dashboard/settings/privacy');
   });
 
   it('records status transitions and a ComplianceLog entry on completion', async () => {
@@ -276,7 +298,7 @@ describe('Phase 11: API keys cannot exfiltrate or destroy the account (security 
       .post('/api/capture')
       .set('Authorization', `Bearer ${key}`)
       .send({ snippet: 'We ship every Friday afternoon.', platform: 'claude' });
-    expect(capture.status).toBe(201);
+    expect(capture.status).toBe(202);
   });
 
   it('refuses to let an extension-scoped key export the account', async () => {

@@ -57,4 +57,10 @@ export const env = {
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
   googleCallbackUrl: process.env.GOOGLE_CALLBACK_URL ?? '',
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+  // Phase 16 (US-INT-03b): this backend's own externally-reachable base URL — needed as the OAuth
+  // issuer/resource identifier, which (unlike corsOrigin, the frontend's origin) has to be a fixed
+  // value known at server-start time, not something derived per-request the way openapi.routes.ts
+  // derives its `servers.url`. The SDK's `mcpAuthRouter` requires this to be HTTPS outside
+  // localhost — see mcp.routes.ts.
+  apiPublicUrl: process.env.API_PUBLIC_URL ?? 'http://localhost:4000',
 };

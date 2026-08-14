@@ -1,13 +1,13 @@
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../shared/prisma';
-import { getLlmProvider } from '../../shared/providers/llm.provider';
-import { getCacheProvider } from '../../shared/providers/cache.provider';
 import { toVectorLiteral } from '../../shared/vector';
+import { getCacheProvider } from '../../shared/providers/cache.provider';
 import { accessibleBucketIds, requireBucketMembership } from '../../shared/bucketAccess';
 import { hasPlan } from '../../shared/requirePlan';
 import { AppError } from '../../shared/errors';
 import { auditService } from '../audit/audit.service';
+import { recall, recallAndSummarize, type RecallSummary } from './recall.service';
 
 const CACHE_TTL_MS = 60_000;
 const CANDIDATE_LIMIT = 20;
@@ -18,14 +18,6 @@ const CANDIDATE_LIMIT = 20;
 // mechanism), not a new counter table, since this is the only place that needs the count.
 const CORE_PRECISE_SEARCH_PREVIEW_LIMIT = 5;
 const PRECISE_SEARCH_ACTION = 'chat_search.precise';
-
-interface CandidateRow {
-  conversationId: string;
-  title: string;
-  platform: string;
-  bestChunk: string;
-  distance: number;
-}
 
 // Full-content candidate row for Ask's fan-out (Phase7_Implementation_Plan.md §4) — the same
 // best-chunk-per-conversation query `search()` already runs, exported separately so Ask gets
@@ -99,42 +91,34 @@ export const chatSearchService = {
     const cached = cache.get<ChatSearchResult[]>(key);
     if (cached) return cached;
 
-    const provider = getLlmProvider();
-    const queryEmbedding = await provider.embed(params.query);
-    const vectorLiteral = toVectorLiteral(queryEmbedding);
+    // Phase 17 (US-ARC-07): the "matched chunks and scores, no synthesis" endpoint the OpenAPI
+    // doc already describes this as — powered by hybrid search + RRF now, not raw cosine alone.
+    // Rerank (Stage 3) is the existing semantic/precise split's own knob; per-chunk relevance
+    // assessment (Stage 4) and query expansion (Stage 1) stay reserved for the AI-synthesized
+    // `/inject` path and the MCP tool — this raw endpoint is deliberately the fast/cheap tier the
+    // spec frames Stage 4 latency against, not where that cost is meant to be spent.
+    const expanded = await recall(bucketIds, params.query, { rerank: params.mode === 'precise' });
 
-    // Best-matching chunk per conversation, scoped to accessible buckets — DISTINCT ON picks the
-    // lowest-distance row per conversationId, so a conversation with many matching chunks still
-    // surfaces once, ranked by its single best match.
-    const rows = await prisma.$queryRaw<CandidateRow[]>`
-      SELECT DISTINCT ON (c.id) c.id AS "conversationId", c.title, c.platform,
-        mc.content AS "bestChunk",
-        (mc.embedding <=> ${vectorLiteral}::vector) AS distance
-      FROM "MessageChunk" mc
-      JOIN "Message" m ON m.id = mc."messageId"
-      JOIN "Conversation" c ON c.id = m."conversationId"
-      WHERE c."bucketId" IN (${Prisma.join(bucketIds)})
-        AND mc.embedding IS NOT NULL
-      ORDER BY c.id, distance ASC
-    `;
+    // Collapses back to one row per conversation (its single best-ranked hit) to keep this
+    // endpoint's existing, documented response shape — a conversation with several matching
+    // chunks still surfaces once, same as the pre-Phase-17 `DISTINCT ON` behavior, just powered
+    // by the new pipeline's ranking underneath.
+    const seenConversations = new Set<string>();
+    const collapsed = expanded.filter((row) => {
+      if (seenConversations.has(row.conversationId)) return false;
+      seenConversations.add(row.conversationId);
+      return true;
+    });
 
-    let ranked = rows.sort((a, b) => a.distance - b.distance).slice(0, CANDIDATE_LIMIT);
-
-    if (params.mode === 'precise' && ranked.length > 1) {
-      const order = await provider.rerank(
-        params.query,
-        ranked.map((r) => ({ id: r.conversationId, content: r.bestChunk })),
-      );
-      const byId = new Map(ranked.map((r) => [r.conversationId, r]));
-      ranked = order.map((id) => byId.get(id)).filter((r): r is CandidateRow => Boolean(r));
-    }
-
-    const results: ChatSearchResult[] = ranked.map((r) => ({
-      conversationId: r.conversationId,
-      title: r.title,
-      platform: r.platform,
-      preview: r.bestChunk.slice(0, 240),
-      score: 1 - r.distance,
+    const results: ChatSearchResult[] = collapsed.slice(0, CANDIDATE_LIMIT).map((row, i, arr) => ({
+      conversationId: row.conversationId,
+      title: row.title,
+      platform: row.platform,
+      preview: row.content.slice(0, 240),
+      // Rank-derived, not a raw cosine distance anymore — hybrid+rerank order has no single
+      // underlying distance to invert. Still a monotonically decreasing "how good was this
+      // match" figure in [0,1], which is all any caller has ever actually relied on.
+      score: arr.length > 1 ? 1 - i / arr.length : 1,
     }));
 
     cache.set(key, results, CACHE_TTL_MS);
@@ -142,5 +126,24 @@ export const chatSearchService = {
       await auditService.record(userId, PRECISE_SEARCH_ACTION);
     }
     return results;
+  },
+
+  /**
+   * `POST /api/chat-history/inject` (MemoryPlugin_Clone_Spec.md §6): the full six-stage pipeline,
+   * every stage on — the recall_chat_history MCP tool (Phase 16) calls the exact same
+   * recallAndSummarize() this does, "one pipeline, multiple callers" per the plan.
+   */
+  async inject(userId: string, params: { query: string; bucketId?: string; maxTokens: number }): Promise<RecallSummary> {
+    const bucketIds = params.bucketId
+      ? [(await requireBucketMembership(userId, params.bucketId, 'viewer')).bucketId]
+      : await accessibleBucketIds(userId);
+    if (bucketIds.length === 0) return { summary: '', citations: [] };
+
+    return recallAndSummarize(bucketIds, params.query, {
+      expandQuery: true,
+      rerank: true,
+      assessRelevance: true,
+      tokenBudget: params.maxTokens,
+    });
   },
 };

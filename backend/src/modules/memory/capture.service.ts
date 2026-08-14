@@ -1,4 +1,5 @@
 import { prisma } from '../../shared/prisma';
+import { logger } from '../../shared/logger';
 import { getLlmProvider } from '../../shared/providers/llm.provider';
 
 // Phase 11 (US-ACC-07): the toggle has been stored on User.autoCapture since Phase 1 but nothing
@@ -14,16 +15,18 @@ async function autoCaptureAllowed(userId: string, platform: string | undefined):
   return toggles[platform] !== false;
 }
 
-// US-MEM-03: automatic capture never writes a real Memory — only a pending "capture"
-// MemorySuggestion with draftContent, surfaced for the user to approve or dismiss.
-export const captureService = {
-  async submit(userId: string, snippet: string, platform?: string) {
-    if (!(await autoCaptureAllowed(userId, platform))) return [];
+// Phase 18 (§7.4 "write path must never block the response path"): the extraction LLM call used
+// to sit inline in `submit()`, so the capture endpoint's response time included however long the
+// provider took to reply. This runs fire-and-forget instead, matching the established pattern in
+// embedding.service.ts — the caller gets an immediate ack and the suggestion (if any) appears once
+// this resolves, surfaced by a later `GET /api/suggestions` poll rather than the original response.
+async function processCapture(userId: string, snippet: string, platform: string | undefined): Promise<void> {
+  try {
+    if (!(await autoCaptureAllowed(userId, platform))) return;
 
     const provider = getLlmProvider();
     const candidates = await provider.extractMemoryCandidates(snippet);
 
-    const created = [];
     for (const candidate of candidates) {
       // Dismissing a suggestion must not re-ask for the identical snippet in the same session
       // (US-MEM-03 AC) — a prior suggestion for this exact draft, in any status, blocks a repeat.
@@ -32,11 +35,19 @@ export const captureService = {
       });
       if (existing) continue;
 
-      const suggestion = await prisma.memorySuggestion.create({
+      await prisma.memorySuggestion.create({
         data: { userId, type: 'capture', draftContent: candidate.content },
       });
-      created.push(suggestion);
     }
-    return created;
+  } catch (err) {
+    logger.error({ err, userId }, 'Capture extraction pipeline failed');
+  }
+}
+
+// US-MEM-03: automatic capture never writes a real Memory — only a pending "capture"
+// MemorySuggestion with draftContent, surfaced for the user to approve or dismiss.
+export const captureService = {
+  async submit(userId: string, snippet: string, platform?: string): Promise<void> {
+    void processCapture(userId, snippet, platform);
   },
 };
