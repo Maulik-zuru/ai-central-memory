@@ -52,8 +52,9 @@ async function alreadySuggested(type: string, ids: string[]): Promise<boolean> {
 // older memory carried alongside purely as display context for the reviewer.
 async function proposeAutoRemove(userId: string, target: ClusterRow, match: ClusterRow): Promise<void> {
   const [newer, older] = match.createdAt > target.createdAt ? [match, target] : [target, match];
-  if (await alreadySuggested('remove', [newer.id])) return;
-  await prisma.memorySuggestion.create({ data: { userId, type: 'remove', memoryIds: [newer.id, older.id] } });
+  const memoryIds = [newer.id, older.id];
+  if (await alreadySuggested('remove', memoryIds)) return;
+  await prisma.memorySuggestion.create({ data: { userId, type: 'remove', memoryIds } });
 }
 
 // Phase 19 (ADR-0004): "every model-returned ID is re-validated against the input set and

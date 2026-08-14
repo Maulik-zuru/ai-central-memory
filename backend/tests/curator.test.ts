@@ -293,7 +293,7 @@ describe('Curator — approve/dismiss REST flows for remove and combine', () => 
 
     const memories = await prisma.memory.findMany({ where: { userId, status: 'active' } });
     await curatorService.run(userId, memories[0].id);
-    expect(await prisma.memorySuggestion.count({ where: { userId, type: 'remove', status: 'pending' } })).toBe(1);
+    expect(await prisma.memorySuggestion.count({ where: { userId, type: 'remove', status: 'pending' } })).toBe(0);
   });
 
   it('approving a "combine" suggestion merges every named memory into the survivor and preserves version history', async () => {
@@ -319,5 +319,54 @@ describe('Curator — approve/dismiss REST flows for remove and combine', () => 
 
     const list = await request(app).get('/api/memories').set('Authorization', `Bearer ${token}`);
     expect(list.body.items).toHaveLength(1);
+  });
+});
+
+describe('Curator — suggestion listing carries a bucketId (pending-count badge support)', () => {
+  beforeEach(resetDb);
+
+  it('resolves bucketId from the primary memory for remove/combine/update, and null for capture', async () => {
+    const { token, bucketId } = await seedAccount('curator-bucketid@example.com');
+    await createMemory(token, 'We ship every Friday afternoon.');
+    await createMemory(token, 'We ship every Friday afternoon');
+    await request(app).post('/api/capture').set('Authorization', `Bearer ${token}`).send({ snippet: 'By the way, I use pnpm now.' });
+
+    const suggestions = await waitFor(async () => {
+      const res = await request(app).get('/api/suggestions').set('Authorization', `Bearer ${token}`);
+      return res.body.suggestions.length >= 2 ? (res.body.suggestions as { type: string; bucketId: string | null }[]) : undefined;
+    });
+
+    const remove = suggestions.find((s) => s.type === 'remove');
+    const capture = suggestions.find((s) => s.type === 'capture');
+    expect(remove?.bucketId).toBe(bucketId);
+    expect(capture?.bucketId).toBeNull();
+  });
+});
+
+describe('Curator — "Check for new" manual scan (POST /api/suggestions/scan)', () => {
+  beforeEach(resetDb);
+
+  it('scans every active memory in a bucket and surfaces suggestions for pairs the fire-and-forget pass never saw', async () => {
+    const { token, userId, bucketId } = await seedAccount('curator-scan@example.com');
+    // Seeded directly (no embedding pipeline ever ran for these), simulating memories that
+    // existed before the curator did.
+    await seedMemoryWithEmbedding(userId, bucketId, 'We ship every Friday afternoon.', unitVector(0));
+    await seedMemoryWithEmbedding(userId, bucketId, 'We ship every Friday afternoon', unitVector(1));
+    expect(await prisma.memorySuggestion.count({ where: { userId } })).toBe(0);
+
+    const scan = await request(app).post('/api/suggestions/scan').set('Authorization', `Bearer ${token}`).send({ bucketId });
+    expect(scan.status).toBe(200);
+    expect(scan.body.scanned).toBe(2);
+
+    expect(await prisma.memorySuggestion.count({ where: { userId, type: 'remove' } })).toBe(1);
+  });
+
+  it('requires editor access to the bucket', async () => {
+    const { token: ownerToken, bucketId } = await seedAccount('curator-scan-owner@example.com');
+    const { token: outsiderToken } = await seedAccount('curator-scan-outsider@example.com');
+    void ownerToken;
+
+    const res = await request(app).post('/api/suggestions/scan').set('Authorization', `Bearer ${outsiderToken}`).send({ bucketId });
+    expect(res.status).toBe(403);
   });
 });

@@ -29,9 +29,9 @@ export interface Bucket {
 
 export interface Suggestion {
   id: string;
-  // "stale" is the pre-Phase-18 generic type, still handled for any suggestion created before
-  // ADR-0003's replaces/extends classification landed — new detections are always one of those two.
-  type: "duplicate" | "stale" | "replaces" | "extends" | "capture";
+  // Phase 19 (ADR-0004 "Memory Suggestions curator"): the curator's three operation types, plus
+  // "capture" (a draft awaiting confirmation, unrelated to the curator).
+  type: "remove" | "combine" | "update" | "capture";
   draftContent: string | null;
   status: "pending" | "approved" | "dismissed";
 }

@@ -43,7 +43,7 @@ export const suggestionService = {
     const bucketIds = await accessibleBucketIds(userId);
     const inScopeMemoryIds = await memoryIdsInBuckets(bucketIds);
 
-    return prisma.memorySuggestion.findMany({
+    const suggestions = await prisma.memorySuggestion.findMany({
       where: {
         status: 'pending',
         OR: [
@@ -53,6 +53,18 @@ export const suggestionService = {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    // Phase 19 (ADR-0004's "pending-count badge per bucket"): the frontend groups suggestions by
+    // bucket to render that badge, so it needs a bucketId per suggestion rather than having to
+    // resolve memoryIds[0]->bucket itself for every row. "capture" suggestions have no memory yet
+    // and get null — they aren't scoped to any bucket until approved.
+    const primaryIds = [...new Set(suggestions.map((s) => s.memoryIds[0]).filter((id): id is string => Boolean(id)))];
+    const memories = primaryIds.length > 0
+      ? await prisma.memory.findMany({ where: { id: { in: primaryIds } }, select: { id: true, bucketId: true } })
+      : [];
+    const bucketByMemoryId = new Map(memories.map((m) => [m.id, m.bucketId]));
+
+    return suggestions.map((s) => ({ ...s, bucketId: bucketByMemoryId.get(s.memoryIds[0]) ?? null }));
   },
 
   async approve(userId: string, id: string) {

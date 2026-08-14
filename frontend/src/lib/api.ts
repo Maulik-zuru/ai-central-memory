@@ -81,15 +81,17 @@ export interface MemoryVersion {
   createdAt: string;
 }
 
+// Phase 19 (ADR-0004 "Memory Suggestions curator"): the curator's three operation types.
+// memoryIds[0] is always the primary target — the memory removed, rewritten in place (update), or
+// the chosen survivor (combine, which lists every absorbed memory after it). bucketId is resolved
+// server-side from that primary memory (null for "capture", which has no memory yet).
 export interface Suggestion {
   id: string;
-  // "stale" is the pre-Phase-18 generic type, still handled for any suggestion created before
-  // ADR-0003's replaces/extends classification landed — new detections are always one of those two.
-  type: "duplicate" | "stale" | "replaces" | "extends" | "capture";
-  memoryIdA: string | null;
-  memoryIdB: string | null;
+  type: "remove" | "combine" | "update" | "capture";
+  memoryIds: string[];
   draftContent: string | null;
   status: "pending" | "approved" | "dismissed";
+  bucketId: string | null;
   createdAt: string;
 }
 
@@ -388,6 +390,11 @@ export const api = {
 
   dismissSuggestion: (id: string): Promise<{ suggestion: Suggestion }> =>
     apiRequest(`/api/suggestions/${id}/dismiss`, { method: "POST" }),
+
+  // Phase 19 (ADR-0004): the spec's "Check for new" manual scan action — re-runs the curator
+  // across every active memory in one bucket.
+  scanSuggestions: (bucketId: string): Promise<{ scanned: number }> =>
+    apiRequest("/api/suggestions/scan", { method: "POST", body: JSON.stringify({ bucketId }) }),
 
   capture: (snippet: string): Promise<{ suggestions: Suggestion[] }> =>
     apiRequest("/api/capture", { method: "POST", body: JSON.stringify({ snippet }) }),
