@@ -100,6 +100,7 @@ export type BucketRole = "owner" | "editor" | "viewer";
 export interface Bucket {
   id: string;
   name: string;
+  type: "memory" | "file";
   isDefault: boolean;
   parentId: string | null;
   role: BucketRole;
@@ -116,8 +117,10 @@ export interface BucketMember {
 
 export interface Category {
   id: string;
-  userId: string;
+  bucketId: string;
   label: string;
+  summary: string;
+  additionalContext: string;
   memoryCount: number;
   createdAt: string;
 }
@@ -130,13 +133,33 @@ export interface ContextMemory {
   createdAt: string;
 }
 
+// Present only once a bucket's Smart Memory batch job has run at least once — see
+// ContextPreview.categories below.
+export interface CategoryTier {
+  id: string;
+  label: string;
+  summary: string;
+  additionalContext: string;
+  memoryCount: number;
+  expanded: boolean;
+}
+
 export interface ContextPreview {
   smartModeEnabled: boolean;
   memories: ContextMemory[];
   actualTokens: number;
   everythingTokens: number;
   tokenBudget: number;
+  // Two-tier retrieval (Phase 20): only present when a single, already-categorized bucket was
+  // previewed — every one of that bucket's categories, flagged `expanded` if its memories
+  // contributed to `memories` this call.
+  categories?: CategoryTier[];
 }
+
+export type RecategorizeResult =
+  | { status: "too_few"; memoryCount: number; minimum: number }
+  | { status: "too_large"; memoryCount: number; tokenCount: number; maxMemories: number; maxTokens: number }
+  | { status: "ok"; categories: { id: string; label: string; summary: string; additionalContext: string; memoryCount: number }[] };
 
 export type ProcessingStatus = "processing" | "importing" | "ready" | "error";
 
@@ -425,10 +448,21 @@ export const api = {
 
   acceptInvite: (token: string) => apiRequest(`/api/invites/${token}/accept`, { method: "POST" }),
 
-  categories: (): Promise<{ categories: Category[] }> => apiRequest("/api/categories"),
+  categories: (bucketId?: string): Promise<{ categories: Category[] }> =>
+    apiRequest(bucketId ? `/api/categories?bucketId=${bucketId}` : "/api/categories"),
 
   renameCategory: (id: string, label: string): Promise<{ category: Category }> =>
     apiRequest(`/api/categories/${id}`, { method: "PATCH", body: JSON.stringify({ label }) }),
+
+  // Phase 20: the batch categorization job, owner-only. bucketId must be a "memory" bucket the
+  // caller owns — see categoryService.recategorize's NOT_A_MEMORY_BUCKET/BUCKET_ACCESS_DENIED.
+  recategorizeCategories: (bucketId: string): Promise<RecategorizeResult> =>
+    apiRequest("/api/categories/recategorize", { method: "POST", body: JSON.stringify({ bucketId }) }),
+
+  // Phase 20: destructive — detaches every memory's category in the bucket. confirmation must be
+  // the literal string "RESET" (server-enforced; see category.service.ts).
+  resetCategories: (bucketId: string, confirmation: string): Promise<void> =>
+    apiRequest("/api/categories/reset", { method: "POST", body: JSON.stringify({ bucketId, confirmation }) }),
 
   previewContext: (params: { snippet: string; bucketId?: string }): Promise<ContextPreview> =>
     apiRequest("/api/context/preview", { method: "POST", body: JSON.stringify(params) }),

@@ -1,34 +1,30 @@
 import { prisma } from '../../shared/prisma';
 import { AppError } from '../../shared/errors';
-import { requireBucketMembership, type BucketRole } from '../../shared/bucketAccess';
+import { accessibleBucketIds, requireBucketMembership } from '../../shared/bucketAccess';
+import { categorizationBatchService, type RecategorizeResult } from './categorization-batch.service';
 
-// Categories are scoped per-account (creator) — Phase4_Implementation_Plan.md §5.1. Renaming
-// never touches centroid or memoryCount so it can't break future categorization for that cluster.
+// Phase 20 (ADR-0006): "Type RESET" to confirm — same typed-confirmation discipline as account
+// deletion (accountDeletionService.deleteAccount), enforced here so the friction is real rather
+// than a client-side dialog anyone calling the API directly could skip.
+const REQUIRED_RESET_CONFIRMATION = 'RESET';
+
+// Categories are scoped per-bucket (ADR-0006) — the old per-account scoping and its "bucketId is a
+// narrowing filter, not the real scope" workaround are gone; `Category.bucketId` is the real scope.
 export const categoryService = {
-  // Phase 16 (US-INT-03a/b): `bucketId` is an optional narrowing filter, not a second scope —
-  // categories remain account-scoped (see this module's own comment above); "bucket-scoped
-  // categories" proper is Phase 20's job. This is the same reduced filter
-  // `memoryos_list_bucket_categories` already shipped with, now living here so the REST endpoint
-  // the local MCP server calls and the in-process remote tool share one implementation.
   async list(userId: string, bucketId?: string) {
-    if (bucketId) await requireBucketMembership(userId, bucketId, 'viewer');
-    const categories = await prisma.category.findMany({
-      where: { userId },
-      orderBy: { label: 'asc' },
-    });
-    if (!bucketId) return categories;
-
-    const withMemoriesInBucket = await prisma.category.findMany({
-      where: { id: { in: categories.map((c) => c.id) }, memories: { some: { bucketId } } },
-      select: { id: true },
-    });
-    const matchingIds = new Set(withMemoriesInBucket.map((c) => c.id));
-    return categories.filter((c) => matchingIds.has(c.id));
+    if (bucketId) {
+      await requireBucketMembership(userId, bucketId, 'viewer');
+      return prisma.category.findMany({ where: { bucketId }, orderBy: { label: 'asc' } });
+    }
+    const bucketIds = await accessibleBucketIds(userId);
+    if (bucketIds.length === 0) return [];
+    return prisma.category.findMany({ where: { bucketId: { in: bucketIds } }, orderBy: { label: 'asc' } });
   },
 
   async listMemories(userId: string, categoryId: string, opts: { cursor?: string; limit: number }) {
     const category = await prisma.category.findUnique({ where: { id: categoryId } });
-    if (!category || category.userId !== userId) throw AppError.notFound('Category not found');
+    if (!category) throw AppError.notFound('Category not found');
+    await requireBucketMembership(userId, category.bucketId, 'viewer');
 
     const rows = await prisma.memory.findMany({
       where: { categoryId, status: 'active' },
@@ -44,21 +40,39 @@ export const categoryService = {
   async rename(userId: string, categoryId: string, label: string) {
     const category = await prisma.category.findUnique({ where: { id: categoryId } });
     if (!category) throw AppError.notFound('Category not found');
-
-    if (category.userId !== userId) {
-      // A shared-bucket collaborator can rename a category they didn't create only if they hold
-      // editor+ on at least one memory currently in it — the same edit-rights check that gates
-      // any other content change, not a separate category-ownership rule (§5.1).
-      const editableMember = await prisma.memory.findFirst({
-        where: {
-          categoryId,
-          status: { not: 'deleted' },
-          bucket: { members: { some: { userId, role: { in: ['editor', 'owner'] as BucketRole[] } } } },
-        },
-      });
-      if (!editableMember) throw AppError.forbidden('You do not have access to this category', 'CATEGORY_ACCESS_DENIED');
-    }
-
+    await requireBucketMembership(userId, category.bucketId, 'editor');
     return prisma.category.update({ where: { id: categoryId }, data: { label } });
+  },
+
+  /**
+   * MemoryPlugin_Clone_Spec.md §3.2: only the bucket owner may (re-)run Smart Memory — ADR-0001's
+   * consequence for this rebuild, done as owner-only from the start rather than reusing rename's
+   * editor-or-owner check. Also enforces ADR-0002's eligibility rule: never a file bucket.
+   */
+  async recategorize(userId: string, bucketId: string): Promise<RecategorizeResult> {
+    await requireBucketMembership(userId, bucketId, 'owner');
+    const bucket = await prisma.bucket.findUnique({ where: { id: bucketId } });
+    if (!bucket) throw AppError.notFound('Bucket not found');
+    if (bucket.type !== 'memory') {
+      throw AppError.badRequest('Smart Memory only runs on memory buckets, not file buckets', 'NOT_A_MEMORY_BUCKET');
+    }
+    return categorizationBatchService.recategorize(bucketId);
+  },
+
+  /**
+   * MemoryPlugin_Clone_Spec.md §5.1: "resetting categories is destructive and requires typing a
+   * confirmation phrase." Deleting the bucket's `Category` rows detaches every memory's category
+   * assignment via the existing `Memory_categoryId_fkey ... ON DELETE SET NULL` — the memories
+   * themselves are never touched, only their `categoryId` pointer.
+   */
+  async reset(userId: string, bucketId: string, confirmation: unknown): Promise<void> {
+    if (confirmation !== REQUIRED_RESET_CONFIRMATION) {
+      throw AppError.badRequest(
+        `Type ${REQUIRED_RESET_CONFIRMATION} to confirm resetting this bucket's Smart Memory categories.`,
+        'CONFIRMATION_REQUIRED',
+      );
+    }
+    await requireBucketMembership(userId, bucketId, 'owner');
+    await prisma.category.deleteMany({ where: { bucketId } });
   },
 };

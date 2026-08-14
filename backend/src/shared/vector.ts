@@ -10,3 +10,11 @@
 export function toVectorLiteral(embedding: number[]): string {
   return `[${embedding.join(',')}]`;
 }
+
+/** Inverse of `toVectorLiteral` — parses a pgvector `::text` cast back into a plain number array. */
+export function parseVectorLiteral(literal: string): number[] {
+  return literal
+    .slice(1, -1)
+    .split(',')
+    .map(Number);
+}

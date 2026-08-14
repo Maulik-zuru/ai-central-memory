@@ -32,7 +32,6 @@ model User {
   bucketMembers BucketMember[]
   memories      Memory[]
   suggestions   MemorySuggestion[]
-  categories    Category[]
   conversations Conversation[]
   monthlyInsights MonthlyInsight[]
   files         File[]
@@ -110,6 +109,10 @@ model Bucket {
   userId    String // the creator — always also gets an "owner" BucketMember row (§6.1)
   user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
+  // ADR-0002: set immutably at creation, inferred at backfill time for pre-existing rows. Smart
+  // Memory (Phase 20) is eligible only on `type: "memory"` buckets the caller owns — this is the
+  // field that check filters on instead of the old "infer from which relation is populated" guess.
+  type      String         @default("memory") // "memory" | "file"
   isDefault Boolean        @default(false)
   parentId  String?
   parent    Bucket?        @relation("BucketToBucket", fields: [parentId], references: [id], onDelete: SetNull)
@@ -121,6 +124,7 @@ model Bucket {
   conversations Conversation[]
   files     File[]
   askConversations AskConversation[]
+  categories Category[]
 
   @@index([userId])
   @@index([parentId])
@@ -235,21 +239,26 @@ model MemorySuggestion {
   @@index([userId, status])
 }
 
-// --- Phase 4: Smart Memory & Context Retrieval Engine -------------------------------------
-// See docs/Phase4_Implementation_Plan.md §5.1: categories are scoped per-account (creator), not
-// per-bucket — a category is a property of content, not of organization.
+// --- Phase 4/20: Smart Memory & Context Retrieval Engine -----------------------------------
+// Phase 20 (docs/MemoryPlugin_Parity_Implementation_Plan.md §Phase 20, ADR-0006): categories are
+// scoped per-bucket, not per-account — Phase 4's original per-account scoping is retired along
+// with the incremental centroid-matching that produced it. `summary`/`additionalContext` are
+// written once, together, by the batch categorization job; a Category with only one of the two
+// set never exists, so both are required rather than nullable.
 model Category {
-  id          String                       @id @default(cuid())
-  userId      String
-  user        User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  label       String
-  centroid    Unsupported("vector(1536)")?
-  memoryCount Int                          @default(0)
-  createdAt   DateTime                     @default(now())
-  memories    Memory[]
+  id                String                       @id @default(cuid())
+  bucketId          String
+  bucket            Bucket                       @relation(fields: [bucketId], references: [id], onDelete: Cascade)
+  label             String
+  summary           String
+  additionalContext String
+  centroid          Unsupported("vector(1536)")?
+  memoryCount       Int                          @default(0)
+  createdAt         DateTime                     @default(now())
+  memories          Memory[]
 
-  @@unique([userId, label])
-  @@index([userId])
+  @@unique([bucketId, label])
+  @@index([bucketId])
 }
 
 // --- Phase 5: Chat History Archive (Import + Sync) -----------------------------------------

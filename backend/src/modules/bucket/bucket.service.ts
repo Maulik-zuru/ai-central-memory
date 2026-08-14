@@ -29,7 +29,7 @@ async function assertNoCycle(bucketId: string, candidateParentId: string) {
 }
 
 export const bucketService = {
-  async create(userId: string, name: string, parentId?: string) {
+  async create(userId: string, name: string, parentId?: string, type: 'memory' | 'file' = 'memory') {
     if (parentId) {
       // Creating a bucket nested under another requires at least editor rights on the parent —
       // otherwise anyone could graft a bucket into someone else's tree.
@@ -37,7 +37,7 @@ export const bucketService = {
     }
 
     const bucket = await prisma.$transaction(async (tx) => {
-      const created = await tx.bucket.create({ data: { userId, name, parentId } });
+      const created = await tx.bucket.create({ data: { userId, name, parentId, type } });
       await tx.bucketMember.create({ data: { bucketId: created.id, userId, role: 'owner', acceptedAt: new Date() } });
       return created;
     });
@@ -143,6 +143,7 @@ export const bucketService = {
     return memberships.map((m) => ({
       id: m.bucket.id,
       name: m.bucket.name,
+      type: m.bucket.type as 'memory' | 'file',
       isDefault: m.bucket.isDefault,
       parentId: m.bucket.parentId && visibleIds.has(m.bucket.parentId) ? m.bucket.parentId : null,
       role: m.role,

@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const createBucketSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(100),
   parentId: z.string().optional(),
+  // ADR-0002: set once, immutably, at creation — no rename/move schema below ever accepts `type`.
+  type: z.enum(['memory', 'file']).default('memory'),
 });
 
 export const renameBucketSchema = z.object({

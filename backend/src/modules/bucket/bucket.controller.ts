@@ -11,8 +11,8 @@ function requireAuth(req: Request) {
 export const bucketController = {
   async create(req: Request, res: Response) {
     const { userId } = requireAuth(req);
-    const { name, parentId } = createBucketSchema.parse(req.body);
-    const bucket = await bucketService.create(userId, name, parentId);
+    const { name, parentId, type } = createBucketSchema.parse(req.body);
+    const bucket = await bucketService.create(userId, name, parentId, type);
     res.status(201).json({ bucket });
   },
 

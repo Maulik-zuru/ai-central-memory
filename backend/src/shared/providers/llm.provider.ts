@@ -93,6 +93,28 @@ export interface LlmProvider {
    * failure mode that safeguard exists for.
    */
   proposeCuratorAction(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): Promise<CuratorProposal>;
+  /**
+   * Phase 20 (Smart Memory two-tier rebuild): given one already-clustered group of memories
+   * (grouped by embedding distance — see `categorization-batch.service.ts`, not by this call),
+   * name it and write both fields the two-tier retrieval path depends on: `summary` for a human
+   * skimming Settings, and `additionalContext` written specifically so a different AI reading only
+   * this field — never the memories themselves — can judge whether a live conversation is relevant
+   * enough to expand this category. `MemoryPlugin_Clone_Spec.md` §5.1 is explicit that
+   * `additionalContext` matters more than `summary` for recall quality; the prompt below asks for
+   * it accordingly.
+   */
+  categorizeCluster(members: CategoryClusterMember[]): Promise<CategoryClusterResult>;
+}
+
+export interface CategoryClusterMember {
+  id: string;
+  content: string;
+}
+
+export interface CategoryClusterResult {
+  label: string;
+  summary: string;
+  additionalContext: string;
 }
 
 export interface EntityExtractionResult {
@@ -133,6 +155,22 @@ function stubSuggestCategoryLabel(content: string): string {
   }
   const [top] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] ?? ['general'];
   return top.charAt(0).toUpperCase() + top.slice(1);
+}
+
+// Stub cluster categorization: same "good enough to exercise the contract, not shippable" bar as
+// stubSuggestCategoryLabel — labels off the whole cluster's combined word frequency, summarizes by
+// truncating one representative member, and is honest that there's no real judgment behind
+// `additionalContext` rather than faking one (same honesty bar stubAnswerWithContext sets).
+function stubCategorizeCluster(members: { id: string; content: string }[]): {
+  label: string;
+  summary: string;
+  additionalContext: string;
+} {
+  const combined = members.map((m) => m.content).join(' ');
+  const label = stubSuggestCategoryLabel(combined);
+  const summary = stubSummarize(members[0]?.content ?? '');
+  const additionalContext = `No LLM configured — this category groups ${members.length} ${members.length === 1 ? 'memory' : 'memories'} whose content most frequently mentions "${label.toLowerCase()}".`;
+  return { label, summary, additionalContext };
 }
 
 // Deterministic stub summarizer: the first two sentences, same "good enough to exercise the
@@ -464,6 +502,41 @@ const CURATOR_SYSTEM_PROMPT =
   'NONE — no edit is warranted.\n' +
   'Reply with ONLY the action line (and a CONTENT line if required), no commentary.';
 
+// Phase 20 (Smart Memory two-tier rebuild, MemoryPlugin_Clone_Spec.md §5.1): the memories below have
+// already been grouped by embedding distance (this call only names and describes the group, it does
+// not re-decide membership). ADDITIONAL_CONTEXT is read by an AI, at chat time, that never sees the
+// underlying memories — it exists purely to help that AI decide whether the current conversation
+// warrants loading this category's full memory list, so it should name distinguishing details a
+// generic summary would leave out, not just restate SUMMARY in different words.
+const CATEGORIZE_CLUSTER_SYSTEM_PROMPT =
+  'You are naming one cluster of related memories for a "Smart Memory" feature. An AI will later ' +
+  "see only the short fields you write here — never the memories themselves — to decide whether a " +
+  "conversation is relevant enough to load this cluster's full contents. Reply with exactly these " +
+  'three lines, no commentary before or after:\n' +
+  'LABEL: <a short 2-5 word category name>\n' +
+  'SUMMARY: <one sentence describing what this category covers>\n' +
+  'ADDITIONAL_CONTEXT: <one or two sentences naming the specific topics, entities, or situations ' +
+  'that should trigger loading this category — more useful for that decision than SUMMARY alone>';
+
+function clusterPromptListing(members: { id: string; content: string }[]): string {
+  return members.map((m, i) => `[${i}] ${m.content}`).join('\n');
+}
+
+function parseCategorizeClusterReply(
+  reply: string,
+  members: { id: string; content: string }[],
+): { label: string; summary: string; additionalContext: string } {
+  const lines = reply.split('\n').map((l) => l.trim()).filter(Boolean);
+  const label = lines.find((l) => /^LABEL:/i.test(l))?.replace(/^LABEL:\s*/i, '').trim();
+  const summary = lines.find((l) => /^SUMMARY:/i.test(l))?.replace(/^SUMMARY:\s*/i, '').trim();
+  const additionalContext = lines.find((l) => /^ADDITIONAL_CONTEXT:/i.test(l))?.replace(/^ADDITIONAL_CONTEXT:\s*/i, '').trim();
+
+  if (label && summary && additionalContext) return { label, summary, additionalContext };
+
+  logger.error('Categorize-cluster reply was not in the expected format; using the word-overlap heuristic');
+  return stubCategorizeCluster(members);
+}
+
 export const stubLlmProvider: LlmProvider = {
   async extractMemoryCandidates(snippet: string) {
     return stubExtract(snippet);
@@ -497,6 +570,9 @@ export const stubLlmProvider: LlmProvider = {
   },
   async proposeCuratorAction(target, neighbors) {
     return stubProposeCuratorAction(target, neighbors);
+  },
+  async categorizeCluster(members) {
+    return stubCategorizeCluster(members);
   },
 };
 
@@ -693,6 +769,13 @@ export class AnthropicLlmProvider implements LlmProvider {
   async proposeCuratorAction(target: CuratorClusterItem, neighbors: CuratorClusterItem[]): Promise<CuratorProposal> {
     const res = await this.complete(CURATOR_SYSTEM_PROMPT, curatorPromptListing(target, neighbors), 512);
     return parseCuratorReply(res, target, neighbors);
+  }
+
+  // Phase 20: label + summary + additionalContext for one already-clustered group — see
+  // parseCategorizeClusterReply's comment for how a malformed reply degrades.
+  async categorizeCluster(members: CategoryClusterMember[]): Promise<CategoryClusterResult> {
+    const res = await this.complete(CATEGORIZE_CLUSTER_SYSTEM_PROMPT, clusterPromptListing(members), 256);
+    return parseCategorizeClusterReply(res, members);
   }
 
   // Phase 18 (§7.4): the one place a real call failure becomes a thrown ProviderError instead of
@@ -926,6 +1009,12 @@ export class OpenRouterLlmProvider implements LlmProvider {
     return parseCuratorReply(res, target, neighbors);
   }
 
+  // Phase 20 — same shape as AnthropicLlmProvider's identical method.
+  async categorizeCluster(members: CategoryClusterMember[]): Promise<CategoryClusterResult> {
+    const res = await this.complete(CATEGORIZE_CLUSTER_SYSTEM_PROMPT, clusterPromptListing(members), 256);
+    return parseCategorizeClusterReply(res, members);
+  }
+
   private headers() {
     return {
       'content-type': 'application/json',
@@ -1002,6 +1091,7 @@ export function getLlmProvider(): LlmProvider {
     assessChunkRelevance: (query, candidates) => extraction.assessChunkRelevance(query, candidates),
     summarizeWithCitations: (query, chunks, opts) => extraction.summarizeWithCitations(query, chunks, opts),
     proposeCuratorAction: (target, neighbors) => extraction.proposeCuratorAction(target, neighbors),
+    categorizeCluster: (members) => extraction.categorizeCluster(members),
   };
   return cached;
 }

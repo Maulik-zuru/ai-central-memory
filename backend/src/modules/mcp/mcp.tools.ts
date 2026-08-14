@@ -176,8 +176,12 @@ export function registerMemoryOsTools(server: McpServer, ctx: { userId: string }
     {
       title: 'List bucket categories',
       description:
-        'Smart-Memory categories for the caller\'s memories, optionally filtered to one bucket. ' +
-        '(Categories are account-scoped today, not yet per-bucket — see Phase 20.)',
+        'Smart-Memory category summaries — tier 1 of the two-tier recall mechanism. Each category ' +
+        'carries a label, a summary, and additionalContext written specifically to help you decide ' +
+        'whether the current conversation is relevant enough to load its full memory list via ' +
+        'memoryos_list_category_memories (tier 2). Optionally filtered to one bucket; omit ' +
+        'bucketId to see every category across every bucket you can access. A bucket with no ' +
+        'categories yet has not been through Smart Memory\'s batch categorization job.',
       inputSchema: { bucketId: z.string().optional() },
       annotations: { readOnlyHint: true },
     },
@@ -192,7 +196,11 @@ export function registerMemoryOsTools(server: McpServer, ctx: { userId: string }
     'memoryos_list_category_memories',
     {
       title: 'List category memories',
-      description: 'The full memory list within one Smart-Memory category.',
+      description:
+        'Tier 2 of the two-tier recall mechanism — the full memory list within one Smart-Memory ' +
+        'category, loaded on demand. Call this only after memoryos_list_bucket_categories suggests ' +
+        'the category is relevant to the current conversation; loading every category defeats the ' +
+        'point of the summary-first design.',
       inputSchema: { categoryId: z.string().min(1), cursor: z.string().optional(), limit: PAGE_LIMIT },
       annotations: { readOnlyHint: true },
     },

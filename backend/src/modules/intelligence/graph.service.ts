@@ -28,7 +28,7 @@ function normalize(name: string): string {
   return name.toLowerCase().trim();
 }
 
-// Same P2002-retry-on-race pattern categorization.service.ts established for concurrent creates
+// Same P2002-retry-on-race pattern the categorization batch job uses for concurrent creates
 // under a unique constraint — the batch job processes many rows and two entities that resolve to
 // the same node can race to create it first (docs/Phase9_Implementation_Plan.md §4).
 async function findOrCreateNode(userId: string, name: string, type: string): Promise<{ id: string }> {

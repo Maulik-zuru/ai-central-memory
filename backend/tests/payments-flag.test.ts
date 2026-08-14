@@ -62,9 +62,15 @@ describe('PAYMENTS_ENABLED=false — everything is free', () => {
 
   it('allows category renaming, which is Pro-gated when payments are on', async () => {
     const token = await registerAndGetToken(app, 'free-d@example.com');
-    const account = await request(app).get('/api/account/me').set('Authorization', `Bearer ${token}`);
+    const buckets = await request(app).get('/api/buckets').set('Authorization', `Bearer ${token}`);
     const category = await prisma.category.create({
-      data: { userId: account.body.account.id, label: 'Original', memoryCount: 1 },
+      data: {
+        bucketId: buckets.body.buckets[0].id,
+        label: 'Original',
+        summary: 'A test category.',
+        additionalContext: 'Matches memories about testing.',
+        memoryCount: 1,
+      },
     });
 
     const res = await request(app)
