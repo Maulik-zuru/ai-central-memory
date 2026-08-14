@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../shared/prisma';
-import { getLlmProvider } from '../../shared/providers/llm.provider';
+import { getLlmProvider, callProvider } from '../../shared/providers/llm.provider';
 import { getCacheProvider } from '../../shared/providers/cache.provider';
 import { toVectorLiteral } from '../../shared/vector';
 import { accessibleBucketIds, requireBucketMembership } from '../../shared/bucketAccess';
@@ -78,7 +78,10 @@ export const fileSearchService = {
     const cached = cache.get<FileSearchResult[]>(key);
     if (cached) return cached;
 
-    const queryEmbedding = await getLlmProvider().embed(params.query);
+    const queryEmbedding = await callProvider(
+      () => getLlmProvider().embed(params.query),
+      'Could not search your files right now — the AI provider is temporarily unavailable.',
+    );
     const vectorLiteral = toVectorLiteral(queryEmbedding);
 
     const rows = await prisma.$queryRaw<CandidateRow[]>`

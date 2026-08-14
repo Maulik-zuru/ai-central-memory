@@ -3,7 +3,7 @@ import { AppError } from '../../shared/errors';
 import { auditService } from '../audit/audit.service';
 import { embeddingService } from './embedding.service';
 import { getStorageProvider } from '../../shared/providers/storage.provider';
-import { getLlmProvider } from '../../shared/providers/llm.provider';
+import { getLlmProvider, callProvider } from '../../shared/providers/llm.provider';
 import { bucketService } from '../bucket/bucket.service';
 import { ROLE_RANK, accessibleBucketIds, type BucketRole } from '../../shared/bucketAccess';
 import { analyticsService } from '../intelligence/analytics.service';
@@ -168,7 +168,10 @@ export const memoryService = {
       : await accessibleBucketIds(userId);
 
     const provider = getLlmProvider();
-    const embedding = await provider.embed(opts.query);
+    const embedding = await callProvider(
+      () => provider.embed(opts.query),
+      'Could not search your memories right now — the AI provider is temporarily unavailable.',
+    );
     const rows = await retrievalService.scoreCandidates(bucketIds, embedding);
     const ranked = [...rows].sort((a, b) => a.distance - b.distance);
 

@@ -30,4 +30,10 @@ export class AppError extends Error {
   static conflict(message: string, code = 'CONFLICT') {
     return new AppError(409, code, message);
   }
+
+  // Phase 18 (§7.4 "fail open, never fail silent"): the typed shape a caught `ProviderError`
+  // becomes at a service boundary — a real, distinguishable 503, never a misleadingly-empty 200.
+  static serviceUnavailable(message = 'Service temporarily unavailable', code = 'SERVICE_UNAVAILABLE') {
+    return new AppError(503, code, message);
+  }
 }

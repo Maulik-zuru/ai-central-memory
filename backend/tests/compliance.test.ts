@@ -298,7 +298,7 @@ describe('Phase 11: API keys cannot exfiltrate or destroy the account (security 
       .post('/api/capture')
       .set('Authorization', `Bearer ${key}`)
       .send({ snippet: 'We ship every Friday afternoon.', platform: 'claude' });
-    expect(capture.status).toBe(201);
+    expect(capture.status).toBe(202);
   });
 
   it('refuses to let an extension-scoped key export the account', async () => {

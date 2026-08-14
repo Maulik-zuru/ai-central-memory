@@ -1,8 +1,44 @@
 import crypto from 'crypto';
 import { logger } from '../logger';
+import { AppError } from '../errors';
 
 export interface CaptureCandidate {
   content: string;
+}
+
+/**
+ * Phase 18 (§7.4 "fail open, never fail silent"): thrown by every `LlmProvider` method when the
+ * underlying call itself failed (a non-ok HTTP response, a missing embedding in an otherwise-ok
+ * response) — never substituted with a stub-shaped fallback the way this file used to. A response
+ * that succeeds but is merely malformed (unparseable JSON, an out-of-range rerank index) is a
+ * different, lower-severity case and is NOT a ProviderError — those still degrade gracefully,
+ * exactly as before, because the call itself worked and "nothing usable came back" is closer to a
+ * data-quality problem than an outage. Callers catch this specifically to turn "the provider is
+ * down" into a distinguishable, explicit failure (e.g. `AppError.serviceUnavailable`) instead of
+ * a misleadingly-empty, normal-looking result.
+ */
+export class ProviderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProviderError';
+  }
+}
+
+/**
+ * Phase 18 (§7.4): the one seam every call site routes a provider call through, so "the provider
+ * is down" becomes the same typed, distinguishable `AppError.serviceUnavailable` everywhere
+ * (codebase-design: one translation point, not one invented catch block per caller). Anything
+ * that isn't a `ProviderError` is a bug elsewhere and is rethrown unchanged rather than masked.
+ */
+export async function callProvider<T>(fn: () => Promise<T>, message: string): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof ProviderError) {
+      throw AppError.serviceUnavailable(message, 'PROVIDER_UNAVAILABLE');
+    }
+    throw err;
+  }
 }
 
 export interface LlmProvider {
@@ -319,35 +355,19 @@ const NO_TRAINING_HEADERS = { 'anthropic-beta': 'zero-retention-2024-01-01' } as
 // Real providers plug in here behind the same interface (codebase-design: swappable, small
 // surface). Anthropic has no first-party embeddings endpoint, so extraction and embedding are
 // deliberately independent — either can be "real" while the other stays stubbed.
-class AnthropicLlmProvider implements LlmProvider {
+export class AnthropicLlmProvider implements LlmProvider {
   constructor(private apiKey: string) {}
 
   async extractMemoryCandidates(snippet: string): Promise<CaptureCandidate[]> {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
-        ...NO_TRAINING_HEADERS,
-      },
-      body: JSON.stringify({
-        model: 'claude-3-5-haiku-latest',
-        max_tokens: 512,
-        system:
-          'Extract atomic, self-contained facts worth remembering long-term from the conversation snippet. ' +
-          'Reply with one fact per line, no numbering, no commentary. If nothing is worth remembering, reply with an empty response.',
-        messages: [{ role: 'user', content: snippet }],
-      }),
-    });
-
-    if (!res.ok) {
-      logger.error({ status: res.status }, 'Anthropic extraction call failed; falling back to stub');
-      return stubExtract(snippet);
-    }
-
-    const body = (await res.json()) as { content?: { text?: string }[] };
-    const text = body.content?.[0]?.text ?? '';
+    // Empty is a legitimate reply here (the prompt itself invites it: "if nothing is worth
+    // remembering, reply with an empty response") — complete() only throws on an actual call
+    // failure, so an empty-but-successful reply correctly becomes zero candidates, not a stub.
+    const text = await this.complete(
+      'Extract atomic, self-contained facts worth remembering long-term from the conversation snippet. ' +
+        'Reply with one fact per line, no numbering, no commentary. If nothing is worth remembering, reply with an empty response.',
+      snippet,
+      512,
+    );
     return text
       .split('\n')
       .map((line) => line.trim())
@@ -356,45 +376,24 @@ class AnthropicLlmProvider implements LlmProvider {
   }
 
   async embed(text: string): Promise<number[]> {
-    // No first-party Anthropic embeddings API — fall back to the deterministic hash embedding
-    // unless a separate embedding provider (e.g. OpenAI) is configured.
+    // No first-party Anthropic embeddings API — always the deterministic hash embedding unless a
+    // separate embedding provider (e.g. OpenAI) is configured. Deliberate design, not a failure
+    // fallback: there is no real-embedding attempt here to fail in the first place.
     return hashEmbed(text);
   }
 
   async suggestCategoryLabel(content: string): Promise<string> {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
-        ...NO_TRAINING_HEADERS,
-      },
-      body: JSON.stringify({
-        model: 'claude-3-5-haiku-latest',
-        max_tokens: 16,
-        system: 'Reply with a short (1-3 word) title-case category label for the memory below. No punctuation, no commentary.',
-        messages: [{ role: 'user', content }],
-      }),
-    });
-
-    if (!res.ok) {
-      logger.error({ status: res.status }, 'Anthropic category-label call failed; falling back to stub');
-      return stubSuggestCategoryLabel(content);
-    }
-
-    const body = (await res.json()) as { content?: { text?: string }[] };
-    const label = body.content?.[0]?.text?.trim();
-    return label || stubSuggestCategoryLabel(content);
+    const label = await this.complete(
+      'Reply with a short (1-3 word) title-case category label for the memory below. No punctuation, no commentary.',
+      content,
+      16,
+    );
+    return label.trim() || stubSuggestCategoryLabel(content);
   }
 
   async summarize(text: string): Promise<string> {
-    const res = await this.complete(
-      'Summarize the following in 2-3 sentences, no preamble.',
-      text,
-      256,
-    );
-    return res ?? stubSummarize(text);
+    const res = await this.complete('Summarize the following in 2-3 sentences, no preamble.', text, 256);
+    return res || stubSummarize(text);
   }
 
   async rerank(query: string, candidates: { id: string; content: string }[]): Promise<string[]> {
@@ -406,11 +405,14 @@ class AnthropicLlmProvider implements LlmProvider {
       `Query: ${query}\n\nCandidates:\n${listing}`,
       64,
     );
+    // A malformed-but-present reply is a data-quality issue, not an infra failure — complete()
+    // already threw for the latter, so degrading to the stub ordering here is the right call only
+    // for "the model gave us something we couldn't use."
     const order = res
-      ?.split(',')
+      .split(',')
       .map((s) => parseInt(s.trim(), 10))
       .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length);
-    if (!order || order.length !== candidates.length) return stubRerank(query, candidates);
+    if (order.length !== candidates.length) return stubRerank(query, candidates);
     return order.map((i) => candidates[i].id);
   }
 
@@ -448,7 +450,6 @@ class AnthropicLlmProvider implements LlmProvider {
       text,
       512,
     );
-    if (!res) return stubExtractEntities(text);
     try {
       const parsed = JSON.parse(res) as EntityExtractionResult;
       if (!Array.isArray(parsed.entities) || !Array.isArray(parsed.relations)) {
@@ -461,14 +462,15 @@ class AnthropicLlmProvider implements LlmProvider {
     }
   }
 
-  // Phase 17 (§7.4 "fail open, never fail silent"): unlike the methods above, an actual call
-  // failure here throws rather than falling back to a stub-shaped result. A recall pipeline stage
-  // silently substituting a plausible-looking result on provider failure is exactly the anti-
-  // pattern the spec calls "the single highest-value bug" next to raw-score fusion — the caller
-  // needs to be able to tell "the provider is down" from "genuinely nothing relevant" (a 500-plus-
-  // retry is very different from a legitimate 200 with an empty result). A malformed-but-present
-  // response (the call succeeded, the content just didn't parse) is a different, lower-severity
-  // case — handled per method below, generally by degrading rather than throwing.
+  // Phase 17/18 (§7.4 "fail open, never fail silent"): a real call failure throws (complete()
+  // itself does the throwing now — see its comment) rather than falling back to a stub-shaped
+  // result. A recall pipeline stage silently substituting a plausible-looking result on provider
+  // failure is exactly the anti-pattern the spec calls "the single highest-value bug" next to
+  // raw-score fusion — the caller needs to be able to tell "the provider is down" from "genuinely
+  // nothing relevant" (a 500-plus-retry is very different from a legitimate 200 with an empty
+  // result). A malformed-but-present response (the call succeeded, the content just didn't parse)
+  // is a different, lower-severity case — handled per method below, generally by degrading rather
+  // than throwing.
   async expandQuery(query: string, now: Date): Promise<{ variants: string[]; dateFilter?: { after?: Date; before?: Date } }> {
     const res = await this.complete(
       'Rewrite the recall query into 2-4 first-person variants of what the user probably said back ' +
@@ -480,7 +482,6 @@ class AnthropicLlmProvider implements LlmProvider {
       query,
       256,
     );
-    if (res === null) throw new Error('LLM query-expansion call failed');
     try {
       const parsed = JSON.parse(res) as { variants?: unknown; dateFilter?: { after?: string; before?: string } };
       const rewritten = Array.isArray(parsed.variants) ? parsed.variants.filter((v): v is string => typeof v === 'string') : [];
@@ -501,7 +502,6 @@ class AnthropicLlmProvider implements LlmProvider {
       `Query: ${query}\n\nCandidates:\n${listing}`,
       128,
     );
-    if (res === null) throw new Error('LLM relevance-assessment call failed');
     return parseRelevanceReply(res, candidates);
   }
 
@@ -520,11 +520,14 @@ class AnthropicLlmProvider implements LlmProvider {
       `${priorContext}Query: ${query}\n\nPassages:\n${listing}`,
       opts.tokenBudget + 50,
     );
-    if (res === null) throw new Error('LLM summarization call failed');
     return parseSummaryReply(res, chunks);
   }
 
-  private async complete(system: string, userText: string, maxTokens: number): Promise<string | null> {
+  // Phase 18 (§7.4): the one place a real call failure becomes a thrown ProviderError instead of
+  // logged-and-substituted — every method above that routes through this now genuinely fails
+  // loud on an outage, and only degrades gracefully (per method, above) when the call succeeded
+  // but its content wasn't usable.
+  private async complete(system: string, userText: string, maxTokens: number): Promise<string> {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -541,15 +544,15 @@ class AnthropicLlmProvider implements LlmProvider {
       }),
     });
     if (!res.ok) {
-      logger.error({ status: res.status }, 'Anthropic completion call failed; falling back to stub');
-      return null;
+      logger.error({ status: res.status }, 'Anthropic completion call failed');
+      throw new ProviderError(`Anthropic completion call failed with status ${res.status}`);
     }
     const body = (await res.json()) as { content?: { text?: string }[] };
-    return body.content?.[0]?.text?.trim() ?? null;
+    return body.content?.[0]?.text?.trim() ?? '';
   }
 }
 
-class OpenAiEmbeddingProvider {
+export class OpenAiEmbeddingProvider {
   constructor(private apiKey: string) {}
 
   async embed(text: string): Promise<number[]> {
@@ -560,12 +563,14 @@ class OpenAiEmbeddingProvider {
     });
 
     if (!res.ok) {
-      logger.error({ status: res.status }, 'OpenAI embedding call failed; falling back to stub');
-      return hashEmbed(text);
+      logger.error({ status: res.status }, 'OpenAI embedding call failed');
+      throw new ProviderError(`OpenAI embedding call failed with status ${res.status}`);
     }
 
     const body = (await res.json()) as { data?: { embedding?: number[] }[] };
-    return body.data?.[0]?.embedding ?? hashEmbed(text);
+    const embedding = body.data?.[0]?.embedding;
+    if (!embedding) throw new ProviderError('OpenAI embedding call returned no embedding');
+    return embedding;
   }
 }
 
@@ -573,7 +578,7 @@ class OpenAiEmbeddingProvider {
 // underlying models (Anthropic, OpenAI, Meta, etc.) behind one key — same LlmProvider surface as
 // AnthropicLlmProvider, so it's a drop-in alternative extraction backend. It also proxies
 // OpenAI-compatible embedding models, so it can independently serve embed() too.
-class OpenRouterLlmProvider implements LlmProvider {
+export class OpenRouterLlmProvider implements LlmProvider {
   constructor(
     private apiKey: string,
     private model = 'anthropic/claude-3.5-haiku',
@@ -586,7 +591,6 @@ class OpenRouterLlmProvider implements LlmProvider {
       snippet,
       512,
     );
-    if (res === null) return stubExtract(snippet);
     return res
       .split('\n')
       .map((line) => line.trim())
@@ -602,12 +606,14 @@ class OpenRouterLlmProvider implements LlmProvider {
     });
 
     if (!res.ok) {
-      logger.error({ status: res.status }, 'OpenRouter embedding call failed; falling back to stub');
-      return hashEmbed(text);
+      logger.error({ status: res.status }, 'OpenRouter embedding call failed');
+      throw new ProviderError(`OpenRouter embedding call failed with status ${res.status}`);
     }
 
     const body = (await res.json()) as { data?: { embedding?: number[] }[] };
-    return body.data?.[0]?.embedding ?? hashEmbed(text);
+    const embedding = body.data?.[0]?.embedding;
+    if (!embedding) throw new ProviderError('OpenRouter embedding call returned no embedding');
+    return embedding;
   }
 
   async suggestCategoryLabel(content: string): Promise<string> {
@@ -616,12 +622,12 @@ class OpenRouterLlmProvider implements LlmProvider {
       content,
       16,
     );
-    return res?.trim() || stubSuggestCategoryLabel(content);
+    return res.trim() || stubSuggestCategoryLabel(content);
   }
 
   async summarize(text: string): Promise<string> {
     const res = await this.complete('Summarize the following in 2-3 sentences, no preamble.', text, 256);
-    return res ?? stubSummarize(text);
+    return res || stubSummarize(text);
   }
 
   async rerank(query: string, candidates: { id: string; content: string }[]): Promise<string[]> {
@@ -634,10 +640,10 @@ class OpenRouterLlmProvider implements LlmProvider {
       64,
     );
     const order = res
-      ?.split(',')
+      .split(',')
       .map((s) => parseInt(s.trim(), 10))
       .filter((i) => Number.isInteger(i) && i >= 0 && i < candidates.length);
-    if (!order || order.length !== candidates.length) return stubRerank(query, candidates);
+    if (order.length !== candidates.length) return stubRerank(query, candidates);
     return order.map((i) => candidates[i].id);
   }
 
@@ -675,7 +681,6 @@ class OpenRouterLlmProvider implements LlmProvider {
       text,
       512,
     );
-    if (!res) return stubExtractEntities(text);
     try {
       const parsed = JSON.parse(res) as EntityExtractionResult;
       if (!Array.isArray(parsed.entities) || !Array.isArray(parsed.relations)) {
@@ -688,7 +693,7 @@ class OpenRouterLlmProvider implements LlmProvider {
     }
   }
 
-  // Phase 17 (§7.4) — same "throw on real call failure, degrade gracefully on merely-malformed
+  // Phase 17/18 (§7.4) — same "throw on real call failure, degrade gracefully on merely-malformed
   // content" discipline as AnthropicLlmProvider's identical methods; see that class's comment.
   async expandQuery(query: string, now: Date): Promise<{ variants: string[]; dateFilter?: { after?: Date; before?: Date } }> {
     const res = await this.complete(
@@ -701,7 +706,6 @@ class OpenRouterLlmProvider implements LlmProvider {
       query,
       256,
     );
-    if (res === null) throw new Error('LLM query-expansion call failed');
     try {
       const parsed = JSON.parse(res) as { variants?: unknown; dateFilter?: { after?: string; before?: string } };
       const rewritten = Array.isArray(parsed.variants) ? parsed.variants.filter((v): v is string => typeof v === 'string') : [];
@@ -722,7 +726,6 @@ class OpenRouterLlmProvider implements LlmProvider {
       `Query: ${query}\n\nCandidates:\n${listing}`,
       128,
     );
-    if (res === null) throw new Error('LLM relevance-assessment call failed');
     return parseRelevanceReply(res, candidates);
   }
 
@@ -741,7 +744,6 @@ class OpenRouterLlmProvider implements LlmProvider {
       `${priorContext}Query: ${query}\n\nPassages:\n${listing}`,
       opts.tokenBudget + 50,
     );
-    if (res === null) throw new Error('LLM summarization call failed');
     return parseSummaryReply(res, chunks);
   }
 
@@ -755,7 +757,7 @@ class OpenRouterLlmProvider implements LlmProvider {
     };
   }
 
-  private async complete(system: string, userText: string, maxTokens: number): Promise<string | null> {
+  private async complete(system: string, userText: string, maxTokens: number): Promise<string> {
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: this.headers(),
@@ -769,11 +771,11 @@ class OpenRouterLlmProvider implements LlmProvider {
       }),
     });
     if (!res.ok) {
-      logger.error({ status: res.status }, 'OpenRouter completion call failed; falling back to stub');
-      return null;
+      logger.error({ status: res.status }, 'OpenRouter completion call failed');
+      throw new ProviderError(`OpenRouter completion call failed with status ${res.status}`);
     }
     const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    return body.choices?.[0]?.message?.content?.trim() ?? null;
+    return body.choices?.[0]?.message?.content?.trim() ?? '';
   }
 }
 

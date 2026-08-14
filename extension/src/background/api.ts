@@ -54,8 +54,11 @@ export const backgroundApi = {
   oneClickSave: (content: string, bucketId?: string) =>
     apiFetch<{ memory: Memory }>("/api/memories/one-click", { method: "POST", body: JSON.stringify({ content, bucketId }) }),
 
+  // Phase 18 (§7.4): fire-and-forget server-side — the extraction LLM call no longer blocks the
+  // response, so this only acknowledges the snippet was queued. Callers poll
+  // `getPendingSuggestions` for the suggestion it produces, if any.
   capture: (snippet: string, platform: string) =>
-    apiFetch<{ suggestions: Suggestion[] }>("/api/capture", {
+    apiFetch<{ status: "queued" }>("/api/capture", {
       method: "POST",
       body: JSON.stringify({ snippet, platform }),
     }),

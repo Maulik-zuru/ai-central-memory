@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { createApp } from '../src/app';
-import { disconnect, registerAndGetToken, resetDb } from './testUtils';
+import { disconnect, registerAndGetToken, resetDb, waitFor } from './testUtils';
 
 const app = createApp();
 
@@ -18,19 +18,37 @@ describe('Phase 11: auto-capture consent enforcement (US-ACC-07)', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ autoCapture: { chatgpt: false } });
 
+    // Distinct snippets per platform (rather than the identical text both used to share) so each
+    // one's presence/absence among suggestions is directly attributable to its own request, not
+    // muddied by the capture pipeline's own draftContent dedup.
+    const disabledSnippet = 'We deploy side projects to Railway now — chatgpt attempt.';
+    const enabledSnippet = 'We deploy side projects to Railway now — claude attempt.';
+
     const disabled = await request(app)
       .post('/api/capture')
       .set('Authorization', `Bearer ${token}`)
-      .send({ snippet: 'We deploy side projects to Railway now.', platform: 'chatgpt' });
-    expect(disabled.status).toBe(201);
-    expect(disabled.body.suggestions).toHaveLength(0);
+      .send({ snippet: disabledSnippet, platform: 'chatgpt' });
+    expect(disabled.status).toBe(202);
 
     const stillEnabled = await request(app)
       .post('/api/capture')
       .set('Authorization', `Bearer ${token}`)
-      .send({ snippet: 'We deploy side projects to Railway now.', platform: 'claude' });
-    expect(stillEnabled.status).toBe(201);
-    expect(stillEnabled.body.suggestions.length).toBeGreaterThan(0);
+      .send({ snippet: enabledSnippet, platform: 'claude' });
+    expect(stillEnabled.status).toBe(202);
+
+    // Wait for the enabled platform's suggestion to land — proof the fire-and-forget pipeline had
+    // time to run for both requests — then confirm the disabled one never produced its own.
+    const suggestions = await waitFor(() =>
+      request(app)
+        .get('/api/suggestions')
+        .set('Authorization', `Bearer ${token}`)
+        .then((res) =>
+          res.body.suggestions.some((s: { draftContent: string | null }) => s.draftContent === enabledSnippet)
+            ? (res.body.suggestions as { draftContent: string | null }[])
+            : undefined,
+        ),
+    );
+    expect(suggestions.some((s) => s.draftContent === disabledSnippet)).toBe(false);
   });
 
   it('treats an unset platform as enabled, so consent defaults to the pre-Phase-11 behaviour', async () => {
@@ -41,8 +59,15 @@ describe('Phase 11: auto-capture consent enforcement (US-ACC-07)', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ snippet: 'We ship every Friday afternoon.', platform: 'gemini' });
 
-    expect(res.status).toBe(201);
-    expect(res.body.suggestions.length).toBeGreaterThan(0);
+    expect(res.status).toBe(202);
+
+    const suggestions = await waitFor(() =>
+      request(app)
+        .get('/api/suggestions')
+        .set('Authorization', `Bearer ${token}`)
+        .then((res) => (res.body.suggestions.length > 0 ? res.body.suggestions : undefined)),
+    );
+    expect(suggestions.length).toBeGreaterThan(0);
   });
 
   it('disabling capture does not delete suggestions that already exist (US-ACC-07 AC)', async () => {
@@ -52,6 +77,13 @@ describe('Phase 11: auto-capture consent enforcement (US-ACC-07)', () => {
       .post('/api/capture')
       .set('Authorization', `Bearer ${token}`)
       .send({ snippet: 'The launch date moved to next Friday.', platform: 'chatgpt' });
+
+    await waitFor(() =>
+      request(app)
+        .get('/api/suggestions')
+        .set('Authorization', `Bearer ${token}`)
+        .then((res) => (res.body.suggestions.length > 0 ? res.body.suggestions : undefined)),
+    );
 
     await request(app)
       .patch('/api/account/auto-capture')

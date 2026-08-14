@@ -1,7 +1,7 @@
 import { prisma } from '../../shared/prisma';
 import { AppError } from '../../shared/errors';
 import { accessibleBucketIds, requireBucketMembership } from '../../shared/bucketAccess';
-import { getLlmProvider } from '../../shared/providers/llm.provider';
+import { getLlmProvider, callProvider } from '../../shared/providers/llm.provider';
 import { tokenCount } from '../../shared/tokenizer';
 import { retrievalService } from '../context/retrieval.service';
 import { chatSearchService } from '../chat-history/chat-search.service';
@@ -159,7 +159,10 @@ export const askService = {
     const composedQuestion = historyPrefix ? `${historyPrefix}\n\nFollow-up question: ${params.question}` : params.question;
 
     const provider = getLlmProvider();
-    const embedding = await provider.embed(params.question);
+    const embedding = await callProvider(
+      () => provider.embed(params.question),
+      'Could not search your memories right now — the AI provider is temporarily unavailable.',
+    );
     const candidates = budget(await gatherCandidates(bucketIds, embedding, params.mode));
 
     const userPosition = await nextPosition(conversation.id);
@@ -174,9 +177,13 @@ export const askService = {
       answer = "I don't have relevant context for that in the sources you selected.";
       citations = [];
     } else {
-      const result = await provider.answerWithContext(
-        composedQuestion,
-        candidates.map((c) => ({ id: c.id, content: c.content })),
+      const result = await callProvider(
+        () =>
+          provider.answerWithContext(
+            composedQuestion,
+            candidates.map((c) => ({ id: c.id, content: c.content })),
+          ),
+        'Could not generate an answer right now — the AI provider is temporarily unavailable.',
       );
       answer = result.answer;
       const usedSet = new Set(result.usedChunkIds);

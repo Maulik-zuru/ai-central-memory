@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import crypto from 'crypto';
 import { prisma } from '../../shared/prisma';
-import { getLlmProvider } from '../../shared/providers/llm.provider';
+import { getLlmProvider, callProvider } from '../../shared/providers/llm.provider';
 import { getCacheProvider } from '../../shared/providers/cache.provider';
 import { toVectorLiteral } from '../../shared/vector';
 import { tokenCount } from '../../shared/tokenizer';
@@ -101,7 +101,10 @@ export const retrievalService = {
     if (cached) return cached;
 
     const provider = getLlmProvider();
-    const snippetEmbedding = await provider.embed(params.snippet);
+    const snippetEmbedding = await callProvider(
+      () => provider.embed(params.snippet),
+      'Could not check your memories right now — the AI provider is temporarily unavailable.',
+    );
     const candidates = await this.scoreCandidates(bucketIds, snippetEmbedding);
 
     const everythingTokens = candidates.reduce((sum, c) => sum + tokenCount(c.content), 0);

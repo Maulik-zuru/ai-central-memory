@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../shared/prisma';
 import { toVectorLiteral } from '../../shared/vector';
-import { getLlmProvider } from '../../shared/providers/llm.provider';
+import { getLlmProvider, callProvider } from '../../shared/providers/llm.provider';
 import { tokenCount } from '../../shared/tokenizer';
 import { reciprocalRankFusion, fuseAcrossVariants } from './rank-fusion';
 
@@ -176,9 +176,9 @@ export async function expandContext(rows: RecallChunkRow[]): Promise<ExpandedChu
  */
 export async function rerankRows(query: string, rows: RecallChunkRow[]): Promise<RecallChunkRow[]> {
   if (rows.length <= 1) return rows;
-  const order = await getLlmProvider().rerank(
-    query,
-    rows.map((r) => ({ id: r.id, content: r.content })),
+  const order = await callProvider(
+    () => getLlmProvider().rerank(query, rows.map((r) => ({ id: r.id, content: r.content }))),
+    'Could not rank these results right now — the AI provider is temporarily unavailable.',
   );
   const byId = new Map(rows.map((r) => [r.id, r]));
   return order.map((id) => byId.get(id)).filter((r): r is RecallChunkRow => Boolean(r));
@@ -192,9 +192,9 @@ export async function rerankRows(query: string, rows: RecallChunkRow[]): Promise
 export async function filterByRelevance(query: string, rows: RecallChunkRow[]): Promise<RecallChunkRow[]> {
   if (rows.length === 0) return [];
   const relevantIds = new Set(
-    await getLlmProvider().assessChunkRelevance(
-      query,
-      rows.map((r) => ({ id: r.id, content: r.content })),
+    await callProvider(
+      () => getLlmProvider().assessChunkRelevance(query, rows.map((r) => ({ id: r.id, content: r.content }))),
+      'Could not filter these results right now — the AI provider is temporarily unavailable.',
     ),
   );
   return rows.filter((r) => relevantIds.has(r.id));
@@ -223,7 +223,10 @@ export async function recall(bucketIds: string[], query: string, opts: RecallOpt
   let variants: string[];
   let dateFilter: DateFilter | undefined;
   if (opts.expandQuery) {
-    const expanded = await provider.expandQuery(query, new Date());
+    const expanded = await callProvider(
+      () => provider.expandQuery(query, new Date()),
+      'Could not expand your search query right now — the AI provider is temporarily unavailable.',
+    );
     variants = expanded.variants;
     dateFilter = expanded.dateFilter;
   } else {
@@ -232,7 +235,10 @@ export async function recall(bucketIds: string[], query: string, opts: RecallOpt
 
   const perVariantFused = await Promise.all(
     variants.map(async (variant) => {
-      const embedding = await provider.embed(variant);
+      const embedding = await callProvider(
+        () => provider.embed(variant),
+        'Could not search your chat history right now — the AI provider is temporarily unavailable.',
+      );
       return hybridSearchOneVariant(bucketIds, variant, embedding, dateFilter);
     }),
   );
@@ -301,10 +307,14 @@ export async function recallAndSummarize(
   let runningSummary: string | undefined;
   const citedIds = new Set<string>();
   for (const batch of batches) {
-    const result = await provider.summarizeWithCitations(
-      query,
-      batch.map((r) => ({ id: r.id, content: r.content })),
-      { tokenBudget: opts.tokenBudget, priorSummary: runningSummary },
+    const result = await callProvider(
+      () =>
+        provider.summarizeWithCitations(
+          query,
+          batch.map((r) => ({ id: r.id, content: r.content })),
+          { tokenBudget: opts.tokenBudget, priorSummary: runningSummary },
+        ),
+      'Could not summarize your chat history right now — the AI provider is temporarily unavailable.',
     );
     runningSummary = result.summary;
     result.citedIds.forEach((id) => citedIds.add(id));

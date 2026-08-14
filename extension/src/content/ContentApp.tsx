@@ -7,6 +7,23 @@ import { getPrefs } from "../lib/storage";
 type SelectionState = { text: string; x: number; y: number } | null;
 type ToastState = string | null;
 
+// Extraction (Phase 18 §7.4) typically finishes well within this window; if it doesn't, the
+// confirmation card just doesn't appear for this turn — the suggestion still exists and shows up
+// next time the popup's inbox is opened, so nothing is lost, only the in-page nudge.
+async function pollForNewCaptureSuggestion(
+  knownIds: Set<string>,
+  attempts = 8,
+  intervalMs = 700,
+): Promise<Suggestion | null> {
+  for (let i = 0; i < attempts; i++) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    const { suggestions } = await sendToBackground<{ suggestions: Suggestion[] }>({ type: "GET_PENDING_SUGGESTIONS" });
+    const fresh = suggestions.find((s) => s.type === "capture" && s.status === "pending" && !knownIds.has(s.id));
+    if (fresh) return fresh;
+  }
+  return null;
+}
+
 export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
   const [quickInjectOpen, setQuickInjectOpen] = useState(false);
   const [preview, setPreview] = useState<ContextPreview | null>(null);
@@ -41,17 +58,24 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
 
   // Capture-confirmation: watch for new assistant turns, run the same draft-then-confirm
   // pipeline the dashboard's inbox already uses (US-MEM-03).
+  //
+  // Phase 18 (§7.4): the server now runs extraction fire-and-forget, so `CAPTURE` only
+  // acknowledges the snippet was queued — it no longer hands back the suggestion it produces (if
+  // any) in the same response. This polls the general pending-suggestions list briefly afterward
+  // and picks out whichever suggestion is new since the request was made — an id-diff rather than
+  // a timestamp comparison, since the extension's clock and the server's can drift.
   useEffect(() => {
     const unobserve = adapter.observeNewTurns(async (text) => {
       try {
-        const { suggestions } = await sendToBackground<{ suggestions: Suggestion[] }>({
-          type: "CAPTURE",
-          snippet: text,
-          platform: adapter.name,
-        });
-        // An empty array means auto-capture is switched off for this platform (US-ACC-07, enforced
-        // server-side since Phase 11) — nothing to surface, which is the whole point of the toggle.
-        const pending = suggestions.find((s) => s.status === "pending");
+        const before = await sendToBackground<{ suggestions: Suggestion[] }>({ type: "GET_PENDING_SUGGESTIONS" });
+        const knownIds = new Set(before.suggestions.map((s) => s.id));
+
+        await sendToBackground({ type: "CAPTURE", snippet: text, platform: adapter.name });
+
+        // An auto-capture toggle switched off for this platform (US-ACC-07) or nothing worth
+        // remembering both look the same here: no new suggestion ever shows up, and polling
+        // simply exhausts its attempts — which is the whole point of the toggle.
+        const pending = await pollForNewCaptureSuggestion(knownIds);
         if (pending) setPendingSuggestion(pending);
       } catch {
         // The call failed — silently skip; this is a background convenience, not a user-initiated
