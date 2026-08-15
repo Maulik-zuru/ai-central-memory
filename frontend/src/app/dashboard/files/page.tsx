@@ -24,7 +24,15 @@ export default function FilesPage() {
   const buckets = useQuery({ queryKey: ["buckets"], queryFn: api.buckets });
   const defaultBucketId = buckets.data?.buckets.find((b) => b.isDefault)?.id ?? buckets.data?.buckets[0]?.id;
 
-  const files = useQuery({ queryKey: ["files"], queryFn: () => api.files({ limit: 50 }), enabled: !query });
+  const files = useQuery({
+    queryKey: ["files"],
+    queryFn: () => api.files({ limit: 50 }),
+    enabled: !query,
+    // Processing happens in the background (processing.service.ts) — poll while anything here is
+    // still "processing" so the status badge catches up on its own, same as the account-export
+    // card's identical queued/running poll (data-export-card.tsx).
+    refetchInterval: (q) => (q.state.data?.items.some((f) => f.status === "processing") ? 2000 : false),
+  });
   const search = useMutation({ mutationFn: () => api.fileSearch({ query }) });
 
   const remove = useMutation({

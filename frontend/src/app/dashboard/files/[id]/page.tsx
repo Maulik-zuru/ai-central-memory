@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Alert } from "@/components/ui/alert";
 import { ProcessingStatusBadge } from "@/components/shared/processing-status-badge";
 
 export default function FileDetailPage() {
@@ -17,7 +18,14 @@ export default function FileDetailPage() {
   const [question, setQuestion] = useState("");
   const [jumpedPage, setJumpedPage] = useState<number | null>(null);
 
-  const fileQuery = useQuery({ queryKey: ["file", id], queryFn: () => api.file(id) });
+  const fileQuery = useQuery({
+    queryKey: ["file", id],
+    queryFn: () => api.file(id),
+    // Same poll-while-in-flight convention as the files list (files/page.tsx) and the account
+    // export card (data-export-card.tsx) — otherwise a file sitting on this exact page never
+    // notices processing finished until it's manually reloaded.
+    refetchInterval: (q) => (q.state.data?.file.status === "processing" ? 2000 : false),
+  });
   const ask = useMutation<FileAskResult, unknown, void>({ mutationFn: () => api.askFile(id, question) });
 
   if (!fileQuery.data) return null;
@@ -61,6 +69,12 @@ export default function FileDetailPage() {
               <Sparkles className="h-4 w-4" />
               {ask.isPending ? "Thinking…" : "Ask"}
             </Button>
+
+            {ask.isError && (
+              <Alert variant="destructive">
+                {ask.error instanceof Error ? ask.error.message : "Could not get an answer right now. Try again."}
+              </Alert>
+            )}
 
             {ask.data && (
               <div className="mt-2 flex flex-col gap-3 rounded-lg border border-border bg-secondary/40 p-4">
