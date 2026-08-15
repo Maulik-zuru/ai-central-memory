@@ -22,6 +22,11 @@ export type ExtensionMessage =
   | { type: "GET_PENDING_SUGGESTIONS" }
   | { type: "APPROVE_SUGGESTION"; id: string }
   | { type: "DISMISS_SUGGESTION"; id: string }
+  // Bulk review — a busy conversation can leave several capture suggestions pending at once
+  // (one per turn, sometimes more than one per turn), and reviewing them one at a time is the
+  // exact friction these exist to remove. Same ids-array shape as the single actions above.
+  | { type: "APPROVE_SUGGESTIONS"; ids: string[] }
+  | { type: "DISMISS_SUGGESTIONS"; ids: string[] }
   | { type: "PREVIEW_CONTEXT"; snippet: string; bucketId?: string }
   | { type: "GET_RECENT_MEMORIES"; bucketId?: string; q?: string }
   | { type: "DELETE_MEMORY"; id: string }

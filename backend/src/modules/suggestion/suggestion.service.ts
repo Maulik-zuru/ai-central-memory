@@ -106,6 +106,45 @@ export const suggestionService = {
     return updated;
   },
 
+  /**
+   * Bulk review for the common "a long conversation produced a pile of pending capture
+   * suggestions" case — a single turn's extraction can surface several candidates at once
+   * (capture.service.ts's `processCapture` loop), and a busy conversation produces one of these
+   * per turn, so reviewing them one at a time is the exact friction this exists to remove.
+   *
+   * Reuses `approve`/`dismiss` per id rather than duplicating their type-specific write logic —
+   * same per-id, not-all-or-nothing shape as chat-history's deleteMany/excludeMany, minus a
+   * `rejected` array: unlike pinned conversations, no suggestion type has a "protected, needs
+   * explicit override" state, so every failure is a plain `failed` (not found / no access).
+   */
+  async approveMany(userId: string, ids: string[]): Promise<{ approved: number; failed: string[] }> {
+    const failed: string[] = [];
+    let approved = 0;
+    for (const id of ids) {
+      try {
+        await this.approve(userId, id);
+        approved++;
+      } catch {
+        failed.push(id);
+      }
+    }
+    return { approved, failed };
+  },
+
+  async dismissMany(userId: string, ids: string[]): Promise<{ dismissed: number; failed: string[] }> {
+    const failed: string[] = [];
+    let dismissed = 0;
+    for (const id of ids) {
+      try {
+        await this.dismiss(userId, id);
+        dismissed++;
+      } catch {
+        failed.push(id);
+      }
+    }
+    return { dismissed, failed };
+  },
+
   /** MemoryPlugin_Clone_Spec.md §5.2's "Check for new" manual scan action — re-runs the curator
    * across every active memory in one bucket, for whatever a fire-and-forget per-save pass hasn't
    * covered (e.g. memories created before the curator existed). */

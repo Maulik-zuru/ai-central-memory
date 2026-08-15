@@ -4,26 +4,10 @@ import type { SiteAdapter } from "../lib/site-adapters";
 import type { Bucket, ContextPreview, Suggestion } from "../lib/types";
 import { getPrefs, setPrefs } from "../lib/storage";
 import { extractMarkerLineMemory, MARKER_LINE_INSTRUCTION } from "../lib/marker-line";
+import { mergeNewSuggestions, pollForNewCaptureSuggestions } from "../lib/capture-review";
 
 type SelectionState = { text: string; x: number; y: number } | null;
 type ToastState = string | null;
-
-// Extraction (Phase 18 §7.4) typically finishes well within this window; if it doesn't, the
-// confirmation card just doesn't appear for this turn — the suggestion still exists and shows up
-// next time the popup's inbox is opened, so nothing is lost, only the in-page nudge.
-async function pollForNewCaptureSuggestion(
-  knownIds: Set<string>,
-  attempts = 8,
-  intervalMs = 700,
-): Promise<Suggestion | null> {
-  for (let i = 0; i < attempts; i++) {
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    const { suggestions } = await sendToBackground<{ suggestions: Suggestion[] }>({ type: "GET_PENDING_SUGGESTIONS" });
-    const fresh = suggestions.find((s) => s.type === "capture" && s.status === "pending" && !knownIds.has(s.id));
-    if (fresh) return fresh;
-  }
-  return null;
-}
 
 // Phase 22 (MemoryPlugin_Clone_Spec.md §5.4 "online sync — no export file needed"): pushes the
 // whole visible transcript so far into the chat-history archive, upserted by the page's own
@@ -60,7 +44,11 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
   const [bucketId, setBucketId] = useState<string | undefined>(undefined);
   const [selection, setSelection] = useState<SelectionState>(null);
   const [toast, setToast] = useState<ToastState>(null);
-  const [pendingSuggestion, setPendingSuggestion] = useState<Suggestion | null>(null);
+  // A busy conversation can leave several capture suggestions pending at once — one per turn,
+  // sometimes more than one per turn (capture.service.ts's extraction loop) — so this is a list
+  // reviewed together with one "Save all" action, not a single card overwritten by whichever
+  // suggestion the next poll happens to find.
+  const [pendingSuggestions, setPendingSuggestions] = useState<Suggestion[]>([]);
   // Phase 22: seconds remaining in the auto-inject countdown, or null when not counting down —
   // behind a setting, default off (see storage.ts's Prefs.autoInjectCountdown) until verified.
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -133,8 +121,8 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
         // An auto-capture toggle switched off for this platform (US-ACC-07) or nothing worth
         // remembering both look the same here: no new suggestion ever shows up, and polling
         // simply exhausts its attempts — which is the whole point of the toggle.
-        const pending = await pollForNewCaptureSuggestion(knownIds);
-        if (pending) setPendingSuggestion(pending);
+        const fresh = await pollForNewCaptureSuggestions(knownIds);
+        if (fresh.length > 0) setPendingSuggestions((prev) => mergeNewSuggestions(prev, fresh));
       } catch {
         // The call failed — silently skip; this is a background convenience, not a user-initiated
         // action needing an error surface.
@@ -237,6 +225,28 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
     setSelection(null);
     await sendToBackground({ type: "ONE_CLICK_SAVE", content: text });
     showToast("Saved to memory");
+  }
+
+  // The one-click "save everything this pass found" action — the whole point of batching the
+  // review instead of showing one suggestion at a time.
+  async function saveAllPendingSuggestions() {
+    const ids = pendingSuggestions.map((s) => s.id);
+    if (ids.length === 0) return;
+    setPendingSuggestions([]);
+    await sendToBackground({ type: "APPROVE_SUGGESTIONS", ids });
+    showToast(ids.length === 1 ? "Saved to memory" : `Saved ${ids.length} memories`);
+  }
+
+  async function dismissAllPendingSuggestions() {
+    const ids = pendingSuggestions.map((s) => s.id);
+    if (ids.length === 0) return;
+    setPendingSuggestions([]);
+    await sendToBackground({ type: "DISMISS_SUGGESTIONS", ids });
+  }
+
+  async function dismissOnePendingSuggestion(id: string) {
+    setPendingSuggestions((prev) => prev.filter((s) => s.id !== id));
+    await sendToBackground({ type: "DISMISS_SUGGESTIONS", ids: [id] });
   }
 
   // Phase 22: a pointer-drag distance under this threshold is treated as a click (opens Quick
@@ -416,43 +426,34 @@ export function ContentApp({ adapter }: { adapter: SiteAdapter }) {
         </div>
       )}
 
-      {pendingSuggestion && (
-        <div className="panel" style={{ bottom: 96, left: 24 }}>
+      {pendingSuggestions.length > 0 && (
+        <div className="panel panel-lg" style={{ bottom: 96, left: 24 }}>
           <div className="panel-header">
-            <span className="panel-title">Save this as a memory?</span>
-            <button
-              className="panel-close"
-              onClick={async () => {
-                await sendToBackground({ type: "DISMISS_SUGGESTION", id: pendingSuggestion.id });
-                setPendingSuggestion(null);
-              }}
-              aria-label="Close"
-            >
+            <span className="panel-title">
+              {pendingSuggestions.length === 1 ? "Save this as a memory?" : `${pendingSuggestions.length} memories to review`}
+            </span>
+            <button className="panel-close" onClick={dismissAllPendingSuggestions} aria-label="Dismiss all">
               ✕
             </button>
           </div>
-          <p className="panel-muted" style={{ marginBottom: 10 }}>
-            {pendingSuggestion.draftContent}
-          </p>
+
+          <div className="memory-checklist" style={{ marginBottom: 10 }}>
+            {pendingSuggestions.map((s) => (
+              <div key={s.id} className="memory-row" style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 12px" }}>
+                <span style={{ flex: 1 }}>{s.draftContent}</span>
+                <button className="link-btn" onClick={() => dismissOnePendingSuggestion(s.id)}>
+                  Skip
+                </button>
+              </div>
+            ))}
+          </div>
+
           <div style={{ display: "flex", gap: 8 }}>
-            <button
-              className="btn-outline"
-              onClick={async () => {
-                await sendToBackground({ type: "DISMISS_SUGGESTION", id: pendingSuggestion.id });
-                setPendingSuggestion(null);
-              }}
-            >
-              Dismiss
+            <button className="btn-outline" onClick={dismissAllPendingSuggestions}>
+              Dismiss all
             </button>
-            <button
-              className="btn-primary"
-              onClick={async () => {
-                await sendToBackground({ type: "APPROVE_SUGGESTION", id: pendingSuggestion.id });
-                setPendingSuggestion(null);
-                showToast("Saved to memory");
-              }}
-            >
-              Approve
+            <button className="btn-primary" onClick={saveAllPendingSuggestions}>
+              {pendingSuggestions.length === 1 ? "Save" : `Save all (${pendingSuggestions.length})`}
             </button>
           </div>
         </div>

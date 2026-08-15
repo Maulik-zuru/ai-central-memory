@@ -59,6 +59,12 @@ async function handle(message: ExtensionMessage): Promise<unknown> {
     case "DISMISS_SUGGESTION":
       return backgroundApi.dismissSuggestion(message.id);
 
+    case "APPROVE_SUGGESTIONS":
+      return backgroundApi.approveSuggestions(message.ids);
+
+    case "DISMISS_SUGGESTIONS":
+      return backgroundApi.dismissSuggestions(message.ids);
+
     case "PREVIEW_CONTEXT":
       return backgroundApi.previewContext(message.snippet, message.bucketId);
 

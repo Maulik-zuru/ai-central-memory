@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { AppError } from '../../shared/errors';
 import { suggestionService } from './suggestion.service';
-import { scanBucketSchema } from './suggestion.types';
+import { bulkSuggestionIdsSchema, scanBucketSchema } from './suggestion.types';
 
 function requireAuth(req: Request) {
   if (!req.auth) throw AppError.unauthorized();
@@ -25,6 +25,20 @@ export const suggestionController = {
     const { userId } = requireAuth(req);
     const suggestion = await suggestionService.dismiss(userId, req.params.id);
     res.status(200).json({ suggestion });
+  },
+
+  async approveMany(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { ids } = bulkSuggestionIdsSchema.parse(req.body);
+    const result = await suggestionService.approveMany(userId, ids);
+    res.status(200).json(result);
+  },
+
+  async dismissMany(req: Request, res: Response) {
+    const { userId } = requireAuth(req);
+    const { ids } = bulkSuggestionIdsSchema.parse(req.body);
+    const result = await suggestionService.dismissMany(userId, ids);
+    res.status(200).json(result);
   },
 
   async scanBucket(req: Request, res: Response) {

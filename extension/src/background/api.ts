@@ -70,6 +70,18 @@ export const backgroundApi = {
 
   dismissSuggestion: (id: string) => apiFetch<{ suggestion: Suggestion }>(`/api/suggestions/${id}/dismiss`, { method: "POST" }),
 
+  approveSuggestions: (ids: string[]) =>
+    apiFetch<{ approved: number; failed: string[] }>("/api/suggestions/approve-many", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+
+  dismissSuggestions: (ids: string[]) =>
+    apiFetch<{ dismissed: number; failed: string[] }>("/api/suggestions/dismiss-many", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+
   previewContext: (snippet: string, bucketId?: string) =>
     apiFetch<ContextPreview>("/api/context/preview", {
       method: "POST",

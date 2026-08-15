@@ -4,6 +4,7 @@ import {
   ArrowsClockwiseIcon,
   BrainIcon,
   CaretDownIcon,
+  CheckIcon,
   ClockCounterClockwiseIcon,
   GearSixIcon,
   MagnifyingGlassIcon,
@@ -13,6 +14,7 @@ import {
   StackIcon,
   TrashIcon,
   UserCircleIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import { sendToBackground } from "../lib/messages";
 import { DASHBOARD_URL } from "../lib/config";
@@ -314,6 +316,16 @@ export function Panel({
     if (action === "APPROVE_SUGGESTION") loadAll();
   }
 
+  // The bulk counterpart — reviewing a pile of pending suggestions one at a time is exactly the
+  // "hard to use for longer chats" friction this exists to remove.
+  async function respondToAllSuggestions(action: "APPROVE_SUGGESTIONS" | "DISMISS_SUGGESTIONS") {
+    const ids = suggestions.map((s) => s.id);
+    if (ids.length === 0) return;
+    await sendToBackground({ type: action, ids });
+    setSuggestions([]);
+    if (action === "APPROVE_SUGGESTIONS") loadAll();
+  }
+
   if (!account) {
     return (
       <div className="flex h-[420px] items-center justify-center text-sm text-[var(--muted-foreground)]">Loading…</div>
@@ -339,24 +351,42 @@ export function Panel({
           <div className="flex flex-col gap-3 p-4">
             {suggestions.length > 0 && (
               <div className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--primary)]/20 bg-[var(--primary-tint)] p-3">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--primary)]">
-                  <SparkleIcon size={14} weight="fill" />
-                  {suggestions.length} suggestion{suggestions.length === 1 ? "" : "s"} to review
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--primary)]">
+                    <SparkleIcon size={14} weight="fill" />
+                    {suggestions.length} suggestion{suggestions.length === 1 ? "" : "s"} to review
+                  </div>
+                  {suggestions.length > 1 && (
+                    <button
+                      onClick={() => respondToAllSuggestions("APPROVE_SUGGESTIONS")}
+                      className="shrink-0 rounded-full bg-[var(--primary)] px-2.5 py-1 text-[11px] font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)]"
+                    >
+                      Save all
+                    </button>
+                  )}
                 </div>
-                <p className="line-clamp-2 text-xs text-[var(--foreground)]/80">{suggestions[0].draftContent}</p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => respondToSuggestion(suggestions[0].id, "DISMISS_SUGGESTION")}
-                    className="flex-1 rounded-full border border-[var(--border)] bg-[var(--card)] py-1.5 text-xs font-medium hover:bg-[var(--secondary)]"
-                  >
-                    Dismiss
-                  </button>
-                  <button
-                    onClick={() => respondToSuggestion(suggestions[0].id, "APPROVE_SUGGESTION")}
-                    className="flex-1 rounded-full bg-[var(--primary)] py-1.5 text-xs font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)]"
-                  >
-                    Save it
-                  </button>
+                <div className="flex max-h-40 flex-col gap-1.5 overflow-y-auto pr-0.5">
+                  {suggestions.map((s) => (
+                    <div key={s.id} className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-[var(--card)] p-2">
+                      <span className="line-clamp-2 flex-1 text-xs text-[var(--foreground)]/80">{s.draftContent}</span>
+                      <div className="flex shrink-0 gap-1">
+                        <button
+                          onClick={() => respondToSuggestion(s.id, "DISMISS_SUGGESTION")}
+                          className="rounded-full p-1 text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
+                          aria-label="Dismiss"
+                        >
+                          <XIcon size={12} />
+                        </button>
+                        <button
+                          onClick={() => respondToSuggestion(s.id, "APPROVE_SUGGESTION")}
+                          className="rounded-full p-1 text-[var(--primary)] hover:bg-[var(--secondary)]"
+                          aria-label="Save"
+                        >
+                          <CheckIcon size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

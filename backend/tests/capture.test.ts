@@ -104,3 +104,85 @@ describe('Automatic capture (US-MEM-03)', () => {
     expect(suggestions.body.suggestions.length).toBeGreaterThan(0);
   });
 });
+
+// A busy conversation produces one capture suggestion per turn (sometimes several from a single
+// turn — capture.service.ts's processCapture loop can create more than one candidate per
+// snippet), and reviewing each individually is the exact "hard to use for longer chats" friction
+// these two bulk endpoints exist to remove.
+describe('Bulk suggestion review (POST /api/suggestions/approve-many, /dismiss-many)', () => {
+  beforeEach(resetDb);
+  afterAll(disconnect);
+
+  async function twoPendingSuggestions(token: string) {
+    await submitCapture(token, 'We deploy to Railway now, not Vercel.');
+    await submitCapture(token, 'The design review moved to Wednesdays.');
+    const suggestions = await waitFor(async () => {
+      const res = await request(app).get('/api/suggestions').set('Authorization', `Bearer ${token}`);
+      return res.body.suggestions.length >= 2 ? (res.body.suggestions as { id: string }[]) : undefined;
+    });
+    return suggestions;
+  }
+
+  it('approves every id in one call and saves each as a real memory', async () => {
+    const token = await registerAndGetToken(app, 'hopper@example.com');
+    const suggestions = await twoPendingSuggestions(token);
+
+    const res = await request(app)
+      .post('/api/suggestions/approve-many')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: suggestions.map((s) => s.id) });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ approved: 2, failed: [] });
+
+    const memories = await request(app).get('/api/memories').set('Authorization', `Bearer ${token}`);
+    expect(memories.body.items).toHaveLength(2);
+    expect(memories.body.items.every((m: { source: string }) => m.source === 'auto')).toBe(true);
+  });
+
+  it('dismisses every id in one call and leaves nothing pending', async () => {
+    const token = await registerAndGetToken(app, 'babbage@example.com');
+    const suggestions = await twoPendingSuggestions(token);
+
+    const res = await request(app)
+      .post('/api/suggestions/dismiss-many')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: suggestions.map((s) => s.id) });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ dismissed: 2, failed: [] });
+
+    const pending = await request(app).get('/api/suggestions').set('Authorization', `Bearer ${token}`);
+    expect(pending.body.suggestions).toHaveLength(0);
+  });
+
+  it('reports an unrecognized id as failed without blocking the rest of the batch', async () => {
+    const token = await registerAndGetToken(app, 'lovelace2@example.com');
+    await submitCapture(token, 'We deploy to Railway now, not Vercel.');
+    const [suggestion] = await waitFor(async () => {
+      const res = await request(app).get('/api/suggestions').set('Authorization', `Bearer ${token}`);
+      return res.body.suggestions.length > 0 ? (res.body.suggestions as { id: string }[]) : undefined;
+    });
+
+    const res = await request(app)
+      .post('/api/suggestions/approve-many')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: [suggestion.id, 'does-not-exist'] });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ approved: 1, failed: ['does-not-exist'] });
+  });
+
+  it('rejects an empty batch and a batch over the 100-id cap at the schema level', async () => {
+    const token = await registerAndGetToken(app, 'turing2@example.com');
+
+    const empty = await request(app)
+      .post('/api/suggestions/dismiss-many')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: [] });
+    expect(empty.status).toBe(400);
+
+    const tooMany = await request(app)
+      .post('/api/suggestions/approve-many')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ids: Array.from({ length: 101 }, (_, i) => `id-${i}`) });
+    expect(tooMany.status).toBe(400);
+  });
+});
